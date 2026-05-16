@@ -1,7 +1,7 @@
 # 열린 결정 기록
 
 > 네비게이션: [문서 색인](../README.md) | 이전: [운영, 보안, 관측성](../50-operations/50-operations-security-observability.md)
-> 관련 문서: [Keycloak 시스템 백서](../WHITEPAPER.md), [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md), [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md), [개발/빌드/테스트 가이드](../40-implementation/40-development-build-test-guide.md)
+> 관련 문서: [Keycloak Identity Governance 시스템 백서](../WHITEPAPER.md), [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md), [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md), [개발/빌드/테스트 가이드](../40-implementation/40-development-build-test-guide.md)
 
 작성일: 2026-05-16
 
@@ -16,7 +16,7 @@
 | ID | 결정/판단 | 근거 |
 | --- | --- | --- |
 | DEC-001 | 현재 서버 배포물의 기준은 `quarkus/` 모듈이다. | `quarkus/README.md`, `quarkus/pom.xml` |
-| DEC-002 | 요청 처리의 중심 객체는 `KeycloakSession`이다. | `server-spi/src/main/java/org/keycloak/models/KeycloakSession.java`, `DefaultKeycloakSession.java` |
+| DEC-002 | 요청 처리의 중심 객체는 `KeycloakSession`이다. | `server-spi/src/main/java/org/keycloak/models/KeycloakSession.java`, `services/src/main/java/org/keycloak/services/DefaultKeycloakSession.java` |
 | DEC-003 | SPI/provider 확장은 `ProviderFactory` 서버 lifecycle과 `Provider` session lifecycle을 기준으로 이해한다. | `server-spi/src/main/java/org/keycloak/provider/ProviderFactory.java` |
 | DEC-004 | Public realm endpoint는 `RealmsResource`가 realm을 resolve하고 protocol/account/broker/login-actions로 위임한다. | `services/src/main/java/org/keycloak/services/resources/RealmsResource.java` |
 | DEC-005 | OIDC authorization/token 흐름의 중심은 `OIDCLoginProtocolService`, `AuthorizationEndpoint`, `TokenEndpoint`, `TokenManager`다. | `services/src/main/java/org/keycloak/protocol/oidc/` |
@@ -25,8 +25,9 @@
 | DEC-008 | 신규 테스트 작성은 `test-framework/`를 우선 기준으로 본다. | `test-framework/docs/README.md`, `testsuite/DEPRECATED.md` |
 | DEC-009 | JS UI는 `js/` pnpm workspace와 Maven frontend plugin이 함께 관리한다. | `js/README.md`, `js/pom.xml` |
 | DEC-010 | Operator는 기본 서버 runtime과 별도 profile/모듈로 관리되는 Quarkus Operator SDK 기반 코드다. | `operator/README.md`, `operator/pom.xml` |
-| DEC-011 | 백서 계층은 `WHITEPAPER.md` 허브와 `whitepaper/ch01`~`ch10` 장별 상세 문서로 둔다. | `docs/custom/WHITEPAPER.md`, `docs/custom/whitepaper/` |
-| DEC-012 | 운영 실패 모드는 탐지 신호, 즉시 조치, 검증 기준까지 포함해 기술한다. | `docs/custom/whitepaper/ch10-operations-security-failure-modes.md` |
+| DEC-011 | 백서 계층은 `WHITEPAPER.md` 허브와 `whitepaper/ch01`~`ch08` 장별 상세 문서로 둔다. | `docs/custom/WHITEPAPER.md`, `docs/custom/whitepaper/` |
+| DEC-012 | 운영 실패 모드는 탐지 신호, 즉시 조치, 검증 기준까지 포함해 기술한다. | `docs/custom/whitepaper/ch08-security-audit-and-roadmap.md` |
+| DEC-013 | 백서 문체는 `litellm-governance`의 3 Volume 구조와 문제 상황 중심 narrative를 따른다. | `/Users/dhsshin/Documents/LLMOps/litellm-governance/docs/WHITEPAPER.md` |
 
 ## 열린 결정 목록
 
@@ -43,7 +44,7 @@
 | OPEN-009 | 중간 | event/audit sink를 DB event store만 사용할 것인가 외부 SIEM/log pipeline과 연동할 것인가 | DB event store, log listener, custom event listener, external sink | audit 요구사항 확정 전 |
 | OPEN-010 | 중간 | token claim과 mapper 표준을 서비스별로 어떻게 제한할 것인가 | minimal default scope, optional scopes, service-specific client scopes | application onboarding 전 |
 | OPEN-011 | 낮음 | 구 `testsuite` 문서와 신규 `test-framework` 문서의 migration map을 별도로 작성할 것인가 | 작성, 필요 시 작성, 작성 안 함 | 테스트 modernization 작업 전 |
-| OPEN-012 | 낮음 | 문서 세트를 더 세분화해 lifecycle 하위 문서를 만들 것인가 | 현재 상세 문서 세트 유지, OIDC/Admin/storage별 하위 문서 추가 | 다음 상세 분석 요청 시 |
+| OPEN-012 | 낮음 | 백서 8장 구조 아래에 deep dive 하위 문서를 추가할 것인가 | 현재 서사형 백서 유지, OIDC/Admin/storage별 하위 문서 추가 | 다음 상세 분석 요청 시 |
 
 ## 추가 상세 문서 후보
 
@@ -59,10 +60,10 @@
 | `30.2-operator-crd-controller-detail.md` | Operator CRD/controller/dependent resource lifecycle 상세 분석 | Operator 변경 필요 |
 | `40.1-local-dev-environment-runbook.md` | 로컬 개발 환경 상세 runbook | 실제 onboarding 문서 필요 |
 | `50.1-production-kubernetes-runbook.md` | production Kubernetes 운영 runbook | 배포 환경 결정 필요 |
-| `whitepaper/ch06.1-authorization-code-code-path.md` | Authorization Code + PKCE를 method 단위로 상세 추적 | OIDC conformance 또는 인증 flow 변경 필요 |
-| `whitepaper/ch07.1-infinispan-cache-topology.md` | cache/session별 Infinispan topology, owner, sticky session, remote cache 상세화 | multi-pod 또는 remote Infinispan 설계 필요 |
-| `whitepaper/ch09.1-operator-reconciliation-runbook.md` | Operator reconcile, update strategy, status condition 상세 runbook | Kubernetes 운영 방식 확정 필요 |
-| `whitepaper/ch10.1-security-hardening-controls.md` | 실패 모드별 hardening control, smoke test, 검증 명령 정리 | production hardening baseline 필요 |
+| `whitepaper/ch04.1-authorization-code-code-path.md` | Authorization Code + PKCE를 method 단위로 상세 추적 | OIDC conformance 또는 인증 flow 변경 필요 |
+| `whitepaper/ch04.2-infinispan-cache-topology.md` | cache/session별 Infinispan topology, owner, sticky session, remote cache 상세화 | multi-pod 또는 remote Infinispan 설계 필요 |
+| `whitepaper/ch07.1-operator-reconciliation-runbook.md` | Operator reconcile, update strategy, status condition 상세 runbook | Kubernetes 운영 방식 확정 필요 |
+| `whitepaper/ch08.1-security-hardening-controls.md` | 실패 모드별 hardening control, smoke test, 검증 명령 정리 | production hardening baseline 필요 |
 
 ## Decision 기록 방식
 
