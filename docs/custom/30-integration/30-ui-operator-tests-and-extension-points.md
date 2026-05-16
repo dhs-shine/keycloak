@@ -1,32 +1,37 @@
 # UI, Operator, 테스트와 확장 지점
 
-> 네비게이션: [문서 색인](../README.md) | 이전: [Realm/Client/User 정책 모델](../20-policy/20-realm-client-user-policy-model.md) | 다음: [개발/빌드/테스트 가이드](../40-implementation/40-development-build-test-guide.md)
-> 관련 문서: [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md), [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md)
+## 1. 개요
 
-작성일: 2026-05-16
+이 문서는 Keycloak server core 바깥의 통합 표면을 정리합니다. 대상은 JS UI, theme packaging, Admin client, Operator, test framework, extension points입니다.
 
-최신 소스 재검증: 2026-05-16, `/Users/dhsshin/Documents/LLMOps/keycloak` 현재 작업트리 기준
+각 영역은 다음 기준으로 읽습니다.
 
-## 목적
+| 기준 | 설명 |
+| --- | --- |
+| 책임 | 해당 영역이 실제로 담당하는 일 |
+| 책임이 아닌 것 | 해당 영역에 기대하면 안 되는 일 |
+| 검증 기준 | 변경 후 확인해야 하는 build/test/운영 계약 |
+| 대표 위치 | source path와 핵심 파일 |
 
-이 문서는 서버 core 외부의 주요 통합 영역을 설명한다. JS UI, themes, Operator, 테스트 framework, 확장 지점을 한 곳에서 찾을 수 있게 정리한다.
+---
 
-## 한 장 요약
+## 2. 통합 표면 요약
 
-| 영역 | 위치 | 핵심 |
-| --- | --- | --- |
-| Admin UI | `js/apps/admin-ui` | React 18, Vite, PatternFly 5 기반 관리자 UI |
-| Account UI | `js/apps/account-ui` | React 18, Vite, PatternFly 기반 사용자 계정 UI |
-| UI shared | `js/libs/ui-shared` | admin/account UI 공용 component/util library |
-| Admin client | `js/libs/keycloak-admin-client` | Keycloak Admin REST API TypeScript client |
-| Theme vendor | `js/themes-vendor` | React, React DOM, PatternFly assets를 theme resource로 bundle |
-| Built-in themes | `themes/` | login/account/email/admin theme resource와 verifier |
-| Local UI server | `js/apps/keycloak-server` | UI 개발용 Keycloak server starter |
-| Operator | `operator/` | Quarkus Operator SDK 기반 Kubernetes Operator |
-| Test framework | `test-framework/` | 신규 JUnit 5 extension 기반 테스트 framework |
-| Legacy testsuite | `testsuite/` | 기존 Arquillian/model testsuite. deprecated 문서 존재 |
+| 영역 | 위치 | 책임 | 책임이 아닌 것 |
+| --- | --- | --- | --- |
+| Admin UI | `js/apps/admin-ui` | realm/client/user/role/flow/admin 설정 UI | server-side 권한 판정의 source of truth |
+| Account UI | `js/apps/account-ui` | end user account/security/session/application UI | admin 정책 관리 |
+| UI shared | `js/libs/ui-shared` | admin/account 공용 component/util | 개별 feature policy 결정 |
+| Admin client | `js/libs/keycloak-admin-client` | Admin REST API TypeScript client | REST API 서버 구현 |
+| Theme vendor | `js/themes-vendor` | React/PatternFly vendor assets bundle | custom theme 정책 결정 |
+| Built-in themes | `themes/` | login/account/email/admin theme resources | UI application business logic |
+| Operator | `operator/` | Kubernetes CRD/controller reconciliation | DB/cache/IdP/DNS/TLS 전체 운영 |
+| Test framework | `test-framework/` | JUnit 5 기반 test resource lifecycle | 모든 legacy testsuite 즉시 대체 |
+| Legacy testsuite | `testsuite/` | 기존 Arquillian/model tests | 신규 테스트의 기본 위치 |
 
-## JS workspace 구조
+---
+
+## 3. JS Workspace 계약
 
 ```text
 js/
@@ -45,9 +50,7 @@ js/
   pom.xml
 ```
 
-### Build 도구
-
-| 도구 | 사용 위치 | 역할 |
+| 도구 | 사용 위치 | 계약 |
 | --- | --- | --- |
 | pnpm | `js/package.json`, `pnpm-workspace.yaml` | workspace package install/build |
 | Wireit | `js/package.json` | package build dependency orchestration |
@@ -55,56 +58,36 @@ js/
 | TypeScript | JS workspace 전체 | strict type 기반 UI/client build |
 | PatternFly | UI apps | Keycloak UI component 기반 |
 | frontend-maven-plugin | `js/pom.xml` | Maven build 중 Node `v24.9.0`, pnpm `10.14.0` 설치와 `pnpm build` 실행 |
-| theme-verifier-maven-plugin | `js/pom.xml`, `themes/pom.xml` | theme resource 검증 |
+| theme verifier | `js/pom.xml`, `themes/pom.xml` | theme resource 검증 |
 
-## Admin UI
+---
 
-| 항목 | 내용 |
-| --- | --- |
-| 경로 | `js/apps/admin-ui` |
-| package | `@keycloak/keycloak-admin-ui` |
-| Maven artifact | `keycloak-admin-ui` |
-| entrypoint | `js/apps/admin-ui/src/main.tsx` |
-| routes | `js/apps/admin-ui/src/routes.tsx` |
-| Vite config | `js/apps/admin-ui/vite.config.ts` |
-| theme resource output | `target/classes/theme/keycloak.v2/admin/resources` |
-| library output | `lib/keycloak-admin-ui.js`, `lib/keycloak-admin-ui.d.ts` |
-| dev server port | `5174` |
+## 4. Admin UI와 Account UI
 
-주요 기능 디렉토리:
+| 항목 | Admin UI | Account UI |
+| --- | --- | --- |
+| 경로 | `js/apps/admin-ui` | `js/apps/account-ui` |
+| package | `@keycloak/keycloak-admin-ui` | `@keycloak/keycloak-account-ui` |
+| Maven artifact | `keycloak-admin-ui` | `keycloak-account-ui` |
+| entrypoint | `src/main.tsx` | `src/main.tsx` |
+| routes | `src/routes.tsx` | `src/routes.tsx` |
+| dev server port | `5174` | `5173` |
+| theme output | `target/classes/theme/keycloak.v2/admin/resources` | `target/classes/theme/keycloak.v3/account/resources` |
 
-| 디렉토리 | 역할 |
+| Admin UI feature directory | 책임 |
 | --- | --- |
 | `src/authentication` | authentication flow 관리 UI |
 | `src/clients` | client 목록/상세/설정 UI |
 | `src/client-scopes` | client scope 관리 |
 | `src/groups` | group 관리 |
 | `src/identity-providers` | external IdP/broker 설정 |
-| `src/realm` | realm 선택/공통 영역 |
 | `src/realm-settings` | realm setting tabs |
 | `src/realm-roles` | realm role 관리 |
 | `src/user` | user 관리 |
 | `src/user-federation` | federation provider 관리 |
 | `src/events` | events/admin events 설정/조회 |
-| `src/workflows` | workflow feature UI |
 
-## Account UI
-
-| 항목 | 내용 |
-| --- | --- |
-| 경로 | `js/apps/account-ui` |
-| package | `@keycloak/keycloak-account-ui` |
-| Maven artifact | `keycloak-account-ui` |
-| entrypoint | `js/apps/account-ui/src/main.tsx` |
-| routes | `js/apps/account-ui/src/routes.tsx` |
-| Vite config | `js/apps/account-ui/vite.config.ts` |
-| theme resource output | `target/classes/theme/keycloak.v3/account/resources` |
-| library output | `lib/keycloak-account-ui.js`, `lib/keycloak-account-ui.d.ts` |
-| dev server port | `5173` |
-
-주요 기능 디렉토리:
-
-| 디렉토리 | 역할 |
+| Account UI feature directory | 책임 |
 | --- | --- |
 | `src/account-security` | credential, session, signing in 보안 영역 |
 | `src/applications` | 사용자 application 접근/permission UI |
@@ -113,7 +96,9 @@ js/
 | `src/personal-info` | profile/personal info |
 | `src/verifiable-credentials` | OID4VC/credential 관련 UI |
 
-## Admin client library
+---
+
+## 5. Admin Client 계약
 
 | 항목 | 내용 |
 | --- | --- |
@@ -124,9 +109,7 @@ js/
 | build | `tsc --pretty` |
 | OpenAPI generation | `kiota generate ... -d openapi.yaml` |
 
-`KeycloakAdminClient`가 제공하는 대표 resource field:
-
-| Field | 의미 |
+| Resource field | 의미 |
 | --- | --- |
 | `users` | user Admin API client |
 | `groups` | group Admin API client |
@@ -142,7 +125,9 @@ js/
 | `authenticationManagement` | authentication flow API client |
 | `cache` | cache admin API client |
 
-## Theme packaging
+---
+
+## 6. Theme Packaging 계약
 
 ```mermaid
 flowchart TD
@@ -155,22 +140,24 @@ flowchart TD
   CommonVendor --> ThemesJar
 ```
 
-| Theme 영역 | 파일/경로 | 설명 |
+| Theme 영역 | 파일/경로 | 계약 |
 | --- | --- | --- |
 | built-in themes | `themes/src/main/resources/theme` | base, keycloak, keycloak.v2 등 기본 theme |
-| admin UI theme descriptor | `js/apps/admin-ui/maven-resources/META-INF/keycloak-themes.json` | `keycloak.v2` admin theme 등록 |
-| account UI theme descriptor | `js/apps/account-ui/maven-resources/META-INF/keycloak-themes.json` | `keycloak.v3` account theme 등록 |
+| admin descriptor | `js/apps/admin-ui/maven-resources/META-INF/keycloak-themes.json` | `keycloak.v2` admin theme 등록 |
+| account descriptor | `js/apps/account-ui/maven-resources/META-INF/keycloak-themes.json` | `keycloak.v3` account theme 등록 |
 | vendor assets | `js/themes-vendor` | React/PatternFly 등 vendor assets bundle |
-| custom theme 안내 | `quarkus/dist/src/main/content/themes/README.md` | custom theme JAR 배포와 build 필요 조건 설명 |
+| custom theme guide | `quarkus/dist/src/main/content/themes/README.md` | custom theme JAR 배포와 build 조건 |
 
-## Operator 구조
+---
+
+## 7. Operator 계약
 
 ```mermaid
 flowchart TD
   CR["Keycloak CR"] --> Controller["KeycloakController"]
   ImportCR["KeycloakRealmImport CR"] --> ImportController["KeycloakRealmImportController"]
-  OIDCClient["KeycloakOIDCClient CR"] --> ClientController["KeycloakOIDCClientController"]
-  SAMLClient["KeycloakSAMLClient CR"] --> ClientController2["KeycloakSAMLClientController"]
+  OIDCClient["KeycloakOIDCClient CR"] --> OIDCController["KeycloakOIDCClientController"]
+  SAMLClient["KeycloakSAMLClient CR"] --> SAMLController["KeycloakSAMLClientController"]
 
   Controller --> Deployment["KeycloakDeploymentDependentResource"]
   Controller --> Service["KeycloakServiceDependentResource"]
@@ -180,12 +167,16 @@ flowchart TD
   Controller --> NetworkPolicy["KeycloakNetworkPolicyDependentResource"]
   Controller --> ServiceMonitor["KeycloakServiceMonitorDependentResource"]
   Controller --> Status["KeycloakStatusAggregator"]
-
-  ImportController --> ImportSecret["RealmImportSecretDependentResource"]
-  ImportController --> ImportJob["RealmImportJobDependentResource"]
 ```
 
-### Operator 핵심 파일
+| Operator surface | 책임 | 검증 기준 |
+| --- | --- | --- |
+| `Keycloak` CR | server image, instances, db/cache/http/hostname/telemetry spec | generated StatefulSet/Service/status condition 확인 |
+| `KeycloakRealmImport` CR | realm import job 생성 | import job idempotency와 existing realm overwrite 정책 확인 |
+| `KeycloakOIDCClient` CR | OIDC client desired state | secret rotation, redirect URI, app rollout coordination |
+| `KeycloakSAMLClient` CR | SAML client desired state | metadata/certificate/ACS URL lifecycle 확인 |
+| Dependent resources | Kubernetes resources 생성 | reconciliation idempotency와 drift 확인 |
+| Update logic | image/config update 전략 | rolling/recreate/update job 영향 확인 |
 
 | 영역 | 파일 |
 | --- | --- |
@@ -193,42 +184,15 @@ flowchart TD
 | Maven config | `operator/pom.xml` |
 | runtime config | `operator/src/main/resources/application.properties` |
 | constants | `operator/src/main/java/org/keycloak/operator/Constants.java` |
-| Keycloak CR | `operator/src/main/java/org/keycloak/operator/crds/v2beta1/deployment/Keycloak.java` |
-| Keycloak spec | `operator/src/main/java/org/keycloak/operator/crds/v2beta1/deployment/KeycloakSpec.java` |
+| Keycloak CR/spec | `operator/src/main/java/org/keycloak/operator/crds/v2beta1/deployment/Keycloak.java`, `KeycloakSpec.java` |
 | Realm import CR | `operator/src/main/java/org/keycloak/operator/crds/v2beta1/realmimport/KeycloakRealmImport.java` |
-| OIDC client CR | `operator/src/main/java/org/keycloak/operator/crds/v2alpha1/client/KeycloakOIDCClient.java` |
-| SAML client CR | `operator/src/main/java/org/keycloak/operator/crds/v2alpha1/client/KeycloakSAMLClient.java` |
+| Client CR | `operator/src/main/java/org/keycloak/operator/crds/v2alpha1/client/` |
 | Main controller | `operator/src/main/java/org/keycloak/operator/controllers/KeycloakController.java` |
-| Realm import controller | `operator/src/main/java/org/keycloak/operator/controllers/KeycloakRealmImportController.java` |
-| Client base controller | `operator/src/main/java/org/keycloak/operator/controllers/KeycloakClientBaseController.java` |
 | Update logic | `operator/src/main/java/org/keycloak/operator/update/` |
 
-### Keycloak CR 주요 spec
+---
 
-| Spec | 의미 |
-| --- | --- |
-| `instances` | desired replica count |
-| `image` | Keycloak image |
-| `startOptimized` | optimized start 사용 여부 |
-| `imagePullSecrets` | image pull secret |
-| `additionalOptions` | extra server options |
-| `env` | environment variables |
-| `http` | HTTP/TLS 설정 |
-| `ingress` | ingress 설정 |
-| `features` | Keycloak feature flags |
-| `transaction` | transaction 설정 |
-| `db` | database 설정 |
-| `hostname` | hostname/proxy 관련 설정 |
-| `truststores` | truststore 설정 |
-| `cache` | cache/cluster 설정 |
-| `resources` | Kubernetes resource request/limit |
-| `proxy` | proxy 관련 설정 |
-| `telemetry` | metrics/tracing 등 telemetry 설정 |
-| `update` | update strategy |
-
-## Test framework 구조
-
-신규 test framework는 JUnit 5 extension 기반이다.
+## 8. Test Framework 계약
 
 ```mermaid
 flowchart TD
@@ -244,29 +208,16 @@ flowchart TD
   Extension --> Callbacks["beforeAll / beforeEach / afterEach / afterAll"]
 ```
 
-### Test framework modules
-
-| 모듈 | 역할 |
+| 축 | 옵션 |
 | --- | --- |
-| `bom` | test framework BOM |
-| `builders` | realm/user/client builder patterns |
-| `core` | JUnit extension, supplier/injection, core lifecycle |
-| `junit5-config` | JUnit platform config |
-| `test-containers` | Testcontainers support |
-| `db-*` | DB별 test framework extension |
-| `email-server` | test email server |
-| `test-providers` | 테스트용 provider |
-| `infinispan-server` | Infinispan server test support |
-| `oauth` | OAuth test support |
-| `remote` | remote server test support |
-| `ui` | browser/UI test support |
-| `clustering` | clustering test support |
-
-### 핵심 annotation
+| Server | `distribution`, `embedded`, `remote` |
+| Database | `dev-mem`, `dev-file`, `mariadb`, `mssql`, `mysql`, `oracle`, `postgres`, `tidb`, `remote` |
+| Browser | `htmlunit`, `chrome`, `chrome-headless`, `firefox`, `firefox-headless` |
+| 설정 우선순위 | system properties -> environment variables -> `.env.test` -> classpath `keycloak-test.properties` -> `KC_TEST_CONFIG` |
 
 | Annotation | 의미 |
 | --- | --- |
-| `@KeycloakIntegrationTest` | test framework JUnit extension 활성화 |
+| `@KeycloakIntegrationTest` | JUnit extension 활성화 |
 | `@InjectRealm` | test realm 생성/주입 |
 | `@InjectUser` | test user 생성/주입 |
 | `@InjectClient` | test client 생성/주입 |
@@ -275,34 +226,12 @@ flowchart TD
 | `@InjectKeycloakUrls` | Keycloak URL 주입 |
 | `@InjectEvents` | user event testing support |
 | `@InjectAdminEvents` | admin event testing support |
-| `@InjectHttpClient` | HTTP client 주입 |
 
-### Test framework 설정 축
+Legacy `testsuite/`는 `testsuite/DEPRECATED.md` 기준으로 신규 테스트의 기본 위치가 아닙니다. 기존 영역 유지보수 시에만 해당 문서를 따릅니다.
 
-| 축 | 옵션 |
-| --- | --- |
-| Server | `distribution`, `embedded`, `remote` |
-| Database | `dev-mem`, `dev-file`, `mariadb`, `mssql`, `mysql`, `oracle`, `postgres`, `tidb`, `remote` |
-| Browser | `htmlunit`, `chrome`, `chrome-headless`, `firefox`, `firefox-headless` |
-| 설정 우선순위 | system properties → environment variables → `.env.test` → classpath `keycloak-test.properties` → `KC_TEST_CONFIG` |
+---
 
-## Legacy testsuite
-
-| 영역 | 상태 | 문서 |
-| --- | --- | --- |
-| `testsuite/` | deprecated | `testsuite/DEPRECATED.md` |
-| integration-arquillian | 기존 대형 integration testsuite | `testsuite/integration-arquillian/HOW-TO-RUN.md` |
-| model testsuite | 기존 model testsuite | `testsuite/model/README.md` |
-
-운영 기준:
-
-| 기준 | 설명 |
-| --- | --- |
-| 신규 테스트 | 가능하면 `test-framework/` 기반으로 작성한다. |
-| 기존 테스트 수정 | 기존 영역의 테스트를 유지보수할 때는 `testsuite/` 문서를 따른다. |
-| migration | deprecated testsuite에서 신규 test framework로 이전하는 방향을 우선한다. |
-
-## 주요 확장 지점
+## 9. Extension Point 계약
 
 | 확장 대상 | 경로 | 검증 포인트 |
 | --- | --- | --- |
@@ -316,6 +245,37 @@ flowchart TD
 | Account UI page | `js/apps/account-ui/src` | route, keycloak-js, user context, tests |
 | Operator resource | `operator/src/main/java/org/keycloak/operator/controllers/` | reconcile idempotency, status, watched resources |
 
-## 작업 범위 기록
+---
 
-이 문서는 분석과 문서화만 수행한다. JS, theme, Operator, 테스트 코드는 수정하지 않는다.
+## 10. Validation Matrix
+
+| 변경 영역 | 최소 검증 |
+| --- | --- |
+| Admin UI | pnpm build, route/i18n/admin-client 영향 확인 |
+| Account UI | pnpm build, account context/session 영향 확인 |
+| Theme | theme verifier, resource path/content hash 확인 |
+| Admin client | TypeScript build, generated API drift 확인 |
+| Operator | unit/local_apiserver test, generated manifest/status 확인 |
+| Test framework | target supplier/server/db/browser 조합 확인 |
+| SPI/provider | provider lifecycle, timeout, event, token/session 영향 테스트 |
+
+---
+
+## 11. 기술 참조 보강
+
+| 주제 | 참조 |
+| --- | --- |
+| JS workspace | `js/README.md`, `js/package.json`, `js/pnpm-workspace.yaml`, `js/pom.xml` |
+| Admin UI | `js/apps/admin-ui/` |
+| Account UI | `js/apps/account-ui/` |
+| Admin client | `js/libs/keycloak-admin-client/` |
+| Themes | `themes/`, `js/themes-vendor/` |
+| Operator | `operator/README.md`, `operator/src/main/java/org/keycloak/operator/` |
+| Test framework | `test-framework/docs/README.md`, `test-framework/core/src/main/java/org/keycloak/testframework/` |
+| Legacy testsuite | `testsuite/DEPRECATED.md`, `testsuite/integration-arquillian/HOW-TO-RUN.md` |
+
+---
+
+## 12. 작업 범위 기록
+
+이 문서는 분석과 문서화만 수행합니다. JS, theme, Operator, 테스트 code는 수정하지 않습니다.

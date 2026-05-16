@@ -1,33 +1,22 @@
 # Realm, Client, User 정책 모델
 
-> 네비게이션: [문서 색인](../README.md) | 이전: [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) | 다음: [UI, Operator, 테스트와 확장 지점](../30-integration/30-ui-operator-tests-and-extension-points.md)
-> 관련 문서: [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md), [운영, 보안, 관측성](../50-operations/50-operations-security-observability.md)
+## 1. 개요
 
-작성일: 2026-05-16
+이 문서는 Keycloak의 핵심 정책 객체를 **운영 의미론과 token/session 효과** 관점에서 정리합니다. 대상 객체는 `Realm`, `Client`, `User`, `Role`, `Group`, `Client Scope`, `Protocol Mapper`, `Authentication Flow`, `Session`, `Token`입니다.
 
-최신 소스 재검증: 2026-05-16, `/Users/dhsshin/Documents/LLMOps/keycloak` 현재 작업트리 기준
+정책 모델의 핵심 원칙은 다음과 같습니다.
 
-## 목적
-
-이 문서는 Keycloak의 핵심 domain model과 정책 모델을 설명한다. `Realm`, `Client`, `User`, `Role`, `Group`, `Client Scope`, `Protocol Mapper`, `Authentication Flow`, `Session`, `Token`이 어떤 관계로 움직이는지 정리한다.
-
-## 핵심 결론
-
-| 개념 | 핵심 |
+| 원칙 | 설명 |
 | --- | --- |
-| Realm | tenant/security domain에 해당하는 최상위 격리 단위다. users, clients, roles, flows, IdP, events, keys, themes 설정을 포함한다. |
-| Client | Keycloak에 등록된 application/service다. OIDC/SAML protocol, redirect URI, credentials, scopes, mappers, roles를 가진다. |
-| User | 로그인 주체다. credentials, attributes, required actions, groups, role mappings, federated identity를 가진다. |
-| Role | 권한의 이름 있는 단위다. realm role과 client role로 나뉘며 composite role을 만들 수 있다. |
-| Group | user를 묶고 role/attribute를 상속하는 조직화 단위다. |
-| Client Scope | 여러 client가 공유할 수 있는 scope/mappers/role scope mapping 묶음이다. |
-| Protocol Mapper | user/client/session 정보를 token claim 또는 SAML assertion으로 변환한다. |
-| Authentication Flow | browser/direct grant/registration/reset credentials 같은 인증 단계 그래프다. |
-| Required Action | 인증 후 사용자에게 password update, email verification, TOTP/WebAuthn 등록 등을 요구한다. |
-| Session | authentication session은 로그인 중간 상태, user session은 인증 완료 후 지속 상태다. |
-| Token | realm key, client config, user session, protocol mapper, scope, role mapping 결과로 발급된다. |
+| Realm은 보안 구역입니다. | users, clients, roles, flows, IdP, keys, events, session policy를 격리합니다. |
+| Client는 신뢰 계약입니다. | redirect URI, grant, credential, scope, mapper, role이 애플리케이션 계약을 만듭니다. |
+| Role은 권한 주장입니다. | token에 실릴 수 있지만, resource server의 최종 domain authorization을 대체하지 않습니다. |
+| Mapper는 외부 노출입니다. | user/session/client 정보를 token claim 또는 SAML assertion으로 변환합니다. |
+| Session과 Token은 함께 설계합니다. | access/refresh/offline token lifespan은 SSO session/cache/DB 정책과 연결됩니다. |
 
-## 전체 관계도
+---
+
+## 2. 전체 모델 관계
 
 ```mermaid
 flowchart TD
@@ -35,6 +24,7 @@ flowchart TD
   Realm --> Clients["Clients"]
   Realm --> RealmRoles["Realm roles"]
   Realm --> Groups["Groups"]
+  Realm --> ClientScopes["Client scopes"]
   Realm --> Flows["Authentication flows"]
   Realm --> IdPs["Identity providers"]
   Realm --> Keys["Keys"]
@@ -42,9 +32,9 @@ flowchart TD
 
   Clients --> ClientRoles["Client roles"]
   Clients --> Redirects["Redirect URIs / Web origins"]
-  Clients --> Scopes["Client scopes"]
   Clients --> Mappers["Protocol mappers"]
   Clients --> Credentials["Client credentials"]
+  ClientScopes --> Mappers
 
   Users --> UserCreds["Credentials"]
   Users --> UserAttrs["Attributes"]
@@ -56,21 +46,14 @@ flowchart TD
   Groups --> RoleMappings
   RealmRoles --> RoleMappings
   ClientRoles --> RoleMappings
-
-  Flows --> Authenticators["Authenticators"]
-  Required --> RequiredProviders["RequiredActionProvider"]
-
-  Scopes --> Mappers
-  Mappers --> Tokens["Access / ID / Refresh token claims"]
-  RoleMappings --> Tokens
+  RoleMappings --> Tokens["Access / ID token claims"]
+  Mappers --> Tokens
   Keys --> Tokens
 ```
 
-## 핵심 model interface
-
-| Interface | 역할 | 대표 파일 |
+| Interface | 책임 | 대표 파일 |
 | --- | --- | --- |
-| `RealmModel` | realm 설정, clients, roles, flows, required actions, localization, IdP, events 등 최상위 상태 | `server-spi/src/main/java/org/keycloak/models/RealmModel.java` |
+| `RealmModel` | realm 설정, clients, roles, flows, required actions, IdP, events | `server-spi/src/main/java/org/keycloak/models/RealmModel.java` |
 | `ClientModel` | OIDC/SAML client 설정, redirect URI, scopes, mappers, roles, credentials | `server-spi/src/main/java/org/keycloak/models/ClientModel.java` |
 | `UserModel` | username, email, attributes, credentials, required actions, federation link, role mappings | `server-spi/src/main/java/org/keycloak/models/UserModel.java` |
 | `RoleModel` | realm/client role과 composite role | `server-spi/src/main/java/org/keycloak/models/RoleModel.java` |
@@ -79,23 +62,23 @@ flowchart TD
 | `UserSessionModel` | 인증 완료 후 user login session | `server-spi/src/main/java/org/keycloak/models/UserSessionModel.java` |
 | `AuthenticationSessionModel` | browser/direct flow 중간 상태 | `server-spi/src/main/java/org/keycloak/sessions/AuthenticationSessionModel.java` |
 
-## Realm 정책 모델
+---
 
-Realm은 Keycloak에서 가장 중요한 격리 단위다.
+## 3. Realm 정책 계약
 
-| 정책 영역 | Realm에서 관리하는 것 | 주의점 |
+Realm은 Keycloak의 최상위 격리 단위입니다.
+
+| 정책 영역 | Realm에서 관리하는 것 | 운영 기준 |
 | --- | --- | --- |
-| 로그인 정책 | login with email, registration, remember me, reset password, brute force, required actions | 인증 UX와 보안 정책을 동시에 바꾼다. |
-| SSL 정책 | realm SSL required 설정 | production에서는 TLS 종료 위치와 proxy header 정책을 함께 검토해야 한다. |
-| Token 정책 | access token lifespan, refresh token lifespan, offline session, SSO session | session/cache/DB persistence와 연결된다. |
-| Key 정책 | active key, signing algorithm, JWKS | key rotation과 client JWKS cache 영향을 고려해야 한다. |
-| Theme 정책 | login/account/admin/email theme | theme JAR, `providers`, build/re-augmentation 영향이 있다. |
-| Event 정책 | user event/admin event 저장, listener, expiration | audit 요구사항과 DB growth를 함께 고려해야 한다. |
-| Identity Provider | broker 설정, mapper, first broker login flow | account linking과 takeover risk를 검토해야 한다. |
+| 로그인 정책 | login with email, registration, remember me, reset password, brute force, required actions | UX와 보안 정책을 함께 바꿉니다. |
+| SSL 정책 | realm SSL required 설정 | production TLS topology, proxy header와 함께 검토합니다. |
+| Token 정책 | access/refresh/offline token lifespan, SSO session idle/max | session/cache/DB persistence와 연결합니다. |
+| Key 정책 | active key, signing algorithm, JWKS | key rotation과 client JWKS cache를 고려합니다. |
+| Theme 정책 | login/account/admin/email theme | theme JAR, `providers`, build/re-augmentation 영향을 검토합니다. |
+| Event 정책 | user/admin event 저장, listener, expiration | audit 요구사항과 DB growth를 함께 봅니다. |
+| Identity Provider | broker 설정, mapper, first broker login flow | account linking과 takeover risk를 검토합니다. |
 
-### Realm 관련 resource
-
-| 영역 | 파일 |
+| Realm 관련 영역 | 파일 |
 | --- | --- |
 | Public realm resource | `services/src/main/java/org/keycloak/services/resources/PublicRealmResource.java` |
 | Realm admin resource | `services/src/main/java/org/keycloak/services/resources/admin/RealmAdminResource.java` |
@@ -103,34 +86,36 @@ Realm은 Keycloak에서 가장 중요한 격리 단위다.
 | Realm entity | `model/jpa/src/main/java/org/keycloak/models/jpa/entities/RealmEntity.java` |
 | Realm cache | `model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/entities/CachedRealm.java` |
 
-## Client 정책 모델
+---
 
-Client는 application 또는 service를 Keycloak에 등록한 단위다.
+## 4. Client 정책 계약
 
-| Client 설정 | 의미 | 보안 기준 |
+Client는 애플리케이션 또는 service와 Keycloak 사이의 신뢰 계약입니다.
+
+| Client 설정 | 의미 | 보안 계약 |
 | --- | --- | --- |
-| `clientId` | protocol request에서 client를 식별 | public 값이므로 secret처럼 취급하지 않는다. |
-| redirect URI | authorization code flow 후 돌아갈 URI allowlist | wildcard를 최소화하고 exact match를 선호한다. |
-| web origins | CORS 허용 origin | browser app에 필요한 origin만 허용한다. |
-| client authentication | confidential client secret, private key JWT 등 | public client와 confidential client를 명확히 구분한다. |
-| standard/direct/implicit flow | OIDC grant/flow enablement | legacy/implicit 사용은 제한적으로 검토한다. |
-| service account | client credentials grant 주체 | M2M 권한은 client role과 scope로 최소화한다. |
-| protocol mappers | token claim 변환 | token size와 PII 노출을 관리한다. |
-| client scopes | default/optional scope 연결 | optional scope로 claim surface를 줄일 수 있다. |
-| client policies | OAuth/OIDC request 제약 | PKCE, redirect, signature, DPoP 등 강제에 사용한다. |
+| `clientId` | protocol request에서 client 식별 | public 값이며 secret이 아닙니다. |
+| redirect URI | authorization code flow 후 돌아갈 URI allowlist | wildcard를 최소화하고 exact match를 선호합니다. |
+| web origins | CORS 허용 origin | browser app에 필요한 origin만 허용합니다. |
+| client authentication | confidential client secret, private key JWT 등 | public/confidential client를 명확히 구분합니다. |
+| standard/direct/implicit flow | OIDC grant/flow enablement | implicit/legacy flow는 제한적으로 검토합니다. |
+| service account | client credentials grant 주체 | M2M 권한은 client role과 scope로 최소화합니다. |
+| protocol mappers | token claim 변환 | token size와 PII 노출을 관리합니다. |
+| client scopes | default/optional scope 연결 | optional scope로 claim surface를 줄입니다. |
+| client policies | OAuth/OIDC request 제약 | PKCE, redirect, signature, DPoP 강제에 사용합니다. |
 
-### Client 관련 코드
-
-| 영역 | 파일 |
+| Client 관련 영역 | 파일 |
 | --- | --- |
 | Client model | `server-spi/src/main/java/org/keycloak/models/ClientModel.java` |
-| Client admin resource | `services/src/main/java/org/keycloak/services/resources/admin/ClientsResource.java`, `ClientResource.java` |
+| Client admin resource | `services/src/main/java/org/keycloak/services/resources/admin/ClientsResource.java`, `services/src/main/java/org/keycloak/services/resources/admin/ClientResource.java` |
 | Client JPA adapter | `model/jpa/src/main/java/org/keycloak/models/jpa/ClientAdapter.java` |
 | Client entity | `model/jpa/src/main/java/org/keycloak/models/jpa/entities/ClientEntity.java` |
 | Client policy | `services/src/main/java/org/keycloak/services/clientpolicy/` |
 | OIDC client auth | `services/src/main/java/org/keycloak/protocol/oidc/utils/AuthorizeClientUtil.java` |
 
-## User, Group, Role 정책 모델
+---
+
+## 5. User, Group, Role 의미론
 
 ```mermaid
 flowchart LR
@@ -145,50 +130,49 @@ flowchart LR
   Scope --> Token["Token roles / claims"]
 ```
 
-| 개념 | 설명 | 설계 기준 |
+| 개념 | 권장 용도 | 피해야 할 사용 |
 | --- | --- | --- |
-| Realm role | realm 전체에 적용되는 권한 | organization-wide 권한 표현에 적합하다. |
-| Client role | 특정 client/resource server에 종속된 권한 | application-specific 권한 표현에 적합하다. |
-| Composite role | 여러 role을 포함하는 role | 관리 편의성과 과도한 권한 확산을 함께 검토한다. |
-| Group | user 집합과 role/attribute 상속 단위 | 조직 구조와 권한 구조를 동일시하지 않도록 주의한다. |
-| Effective roles | direct/group/composite를 합산한 최종 권한 | token mapper와 client scope mapping에 의해 token 노출 여부가 달라진다. |
+| Realm role | organization-wide/platform 권한 | 앱 내부 세부 permission 전체 표현 |
+| Client role | 특정 client/resource server 권한 | 전사 공통 권한 표현 |
+| Composite role | 제한적인 권한 묶음 | 깊은 중첩으로 effective permission 불투명화 |
+| Group | user 집합과 role/attribute assignment | 조직도와 권한 구조를 무조건 동일시 |
+| Effective roles | direct/group/composite 합산 결과 | token 노출 여부를 검토하지 않은 채 그대로 사용 |
 
-### User storage와 federation
+---
 
-| 경로 | 의미 |
-| --- | --- |
-| local user storage | Keycloak DB에 user와 credential을 저장한다. |
-| user federation | LDAP/external provider에서 user lookup/query/credential validation을 수행한다. |
-| federated storage | 외부 user에 대한 local attributes, role mappings, groups, consents, broker links 등을 보조 저장한다. |
-| imported user | 외부 provider user를 local DB에 import/cache하는 형태다. |
+## 6. Federation 정책 계약
 
-관련 파일:
+| 경로 | 의미 | 주의점 |
+| --- | --- | --- |
+| local user storage | Keycloak DB에 user와 credential 저장 | 기존 HR/LDAP source와 중복 가능 |
+| user federation | LDAP/external provider에서 lookup/query/credential validation | timeout, availability, import/sync 정책 필요 |
+| federated storage | 외부 user에 대한 local attributes, role mappings, groups, consents, broker links 저장 | source of truth와 drift 관리 필요 |
+| imported user | external provider user를 local DB에 import/cache | deprovisioning SLA와 stale copy 관리 필요 |
 
 | 영역 | 파일 |
 | --- | --- |
 | User model | `server-spi/src/main/java/org/keycloak/models/UserModel.java` |
-| User admin resource | `services/src/main/java/org/keycloak/services/resources/admin/UsersResource.java`, `UserResource.java` |
+| User admin resource | `services/src/main/java/org/keycloak/services/resources/admin/UsersResource.java`, `services/src/main/java/org/keycloak/services/resources/admin/UserResource.java` |
 | User JPA provider | `model/jpa/src/main/java/org/keycloak/models/jpa/JpaUserProvider.java` |
-| User JPA adapter/entity | `model/jpa/src/main/java/org/keycloak/models/jpa/UserAdapter.java`, `model/jpa/src/main/java/org/keycloak/models/jpa/entities/UserEntity.java` |
 | User storage manager | `model/storage-private/src/main/java/org/keycloak/storage/UserStorageManager.java` |
 | User storage SPI | `model/storage/src/main/java/org/keycloak/storage/UserStorageProvider.java` |
 | LDAP provider | `federation/ldap/src/main/java/org/keycloak/storage/ldap/LDAPStorageProvider.java` |
 | Federated storage | `model/storage/src/main/java/org/keycloak/storage/federated/` |
 
-## Authentication flow 정책 모델
+---
 
-Authentication flow는 인증 단계를 구성하는 graph다.
+## 7. Authentication Flow 계약
+
+Authentication flow는 인증 단계를 구성하는 graph입니다.
 
 | Flow | 용도 | 대표 구성 요소 |
 | --- | --- | --- |
 | Browser flow | authorization endpoint에서 browser login 처리 | cookie, identity provider redirector, username/password, OTP, WebAuthn |
 | Direct grant flow | resource owner password credentials 등 direct token grant | validate username, password, OTP |
-| Registration flow | self-registration | profile, password, terms, recaptcha 등 |
+| Registration flow | self-registration | profile, password, terms, recaptcha |
 | Reset credentials flow | forgot password/reset credentials | email, password update, OTP reset |
 | First broker login flow | external IdP 첫 로그인 | account linking, profile review, user creation |
 | Post broker login flow | broker login 이후 추가 검증 | 추가 인증, required action |
-
-### Required action
 
 | Required action | 의미 | 예시 파일 |
 | --- | --- | --- |
@@ -198,7 +182,9 @@ Authentication flow는 인증 단계를 구성하는 graph다.
 | Configure TOTP | TOTP 등록 | `services/src/main/java/org/keycloak/authentication/requiredactions/UpdateTotp.java` |
 | WebAuthn register | WebAuthn credential 등록 | `services/src/main/java/org/keycloak/authentication/requiredactions/WebAuthnRegister.java` |
 
-## Token, scope, mapper 정책 모델
+---
+
+## 8. Token, Scope, Mapper 의미론
 
 ```mermaid
 flowchart TD
@@ -214,16 +200,14 @@ flowchart TD
   Mappers --> Token["ID token / Access token / UserInfo"]
 ```
 
-| Mapper/Scope 영역 | 설명 | 주의점 |
+| Mapper/Scope 영역 | 계약 | 위험 |
 | --- | --- | --- |
-| User attribute mapper | user attribute를 claim으로 노출 | PII 노출과 token size를 관리한다. |
-| Role mapper | realm/client role을 token에 포함 | client별 최소 권한과 audience를 확인한다. |
-| Group membership mapper | group path/name을 claim으로 노출 | 조직 구조 노출 위험이 있다. |
-| Audience mapper | access token audience 제어 | resource server 검증 모델과 맞춰야 한다. |
-| Client scope | mapper와 role scope mapping의 재사용 단위 | default scope와 optional scope를 명확히 분리한다. |
-| Token lifespan | access/refresh/offline token 유효시간 | 보안과 UX, session cache 운영을 함께 고려한다. |
-
-대표 mapper 파일:
+| User attribute mapper | 필요한 user attribute만 claim으로 노출합니다. | PII 노출, token size 증가 |
+| Role mapper | realm/client role을 token에 포함합니다. | audience와 resource server 검증 누락 |
+| Group membership mapper | group path/name을 claim으로 노출합니다. | 조직 구조 노출 |
+| Audience mapper | access token audience를 제어합니다. | resource server 검증 모델과 불일치 |
+| Client scope | mapper와 role scope mapping의 재사용 단위입니다. | default scope 과다 노출 |
+| Token lifespan | access/refresh/offline token 유효시간입니다. | UX와 탈취 피해의 tradeoff |
 
 | Mapper | 파일 |
 | --- | --- |
@@ -234,9 +218,11 @@ flowchart TD
 | audience | `services/src/main/java/org/keycloak/protocol/oidc/mappers/AudienceProtocolMapper.java` |
 | group membership | `services/src/main/java/org/keycloak/protocol/oidc/mappers/GroupMembershipMapper.java` |
 
-## Session 정책 모델
+---
 
-| Session | 의미 | 저장소 |
+## 9. Session 정책 계약
+
+| Session | 의미 | 저장소/구현 |
 | --- | --- | --- |
 | Root authentication session | browser flow의 root login attempt | Infinispan authentication session provider |
 | Authentication session | tab/client 단위 login 중간 상태 | Infinispan authentication session provider |
@@ -245,8 +231,6 @@ flowchart TD
 | Offline session | offline token을 위한 장기 session | persistent storage 성격이 강함 |
 | Single-use object | action token, code 등 재사용 방지 객체 | Infinispan single-use object provider |
 | Login failure | brute force protection 상태 | Infinispan login failure provider |
-
-관련 파일:
 
 | 영역 | 파일 |
 | --- | --- |
@@ -257,21 +241,50 @@ flowchart TD
 | Infinispan user session | `model/infinispan/src/main/java/org/keycloak/models/sessions/infinispan/InfinispanUserSessionProvider.java` |
 | Persistent session JPA | `model/jpa/src/main/java/org/keycloak/models/jpa/session/` |
 
-## Security policy checklist
+---
+
+## 10. Validation Rules
 
 | 항목 | 기준 |
 | --- | --- |
-| Realm isolation | 서비스/tenant 경계를 realm으로 나눌지 client/role/group으로 나눌지 명확히 정한다. |
-| Redirect URI | wildcard를 최소화하고 production URL을 명확히 등록한다. |
-| PKCE | public client와 browser/mobile client에는 PKCE를 강제한다. |
-| Client secret | confidential client secret은 Secret manager 또는 Kubernetes Secret으로 관리한다. |
-| Token claim | 필요한 claim만 mapper로 노출하고 PII/token size를 제한한다. |
-| Role mapping | composite role과 group role 상속으로 과도한 권한이 생기지 않는지 검토한다. |
-| Federation | LDAP/external provider timeout, imported user lifecycle, credential validation 위치를 결정한다. |
-| Broker | 외부 IdP trust, account linking, email verified 처리, mapper를 검토한다. |
-| Session lifespan | access/refresh/offline/session idle/max 정책을 서비스 위험도에 맞춘다. |
-| Events | admin event와 user event 저장, retention, listener side effect를 audit 요구사항과 맞춘다. |
+| Realm isolation | 서비스/tenant 경계를 realm, client, role, group 중 어디로 둘지 명확히 정합니다. |
+| Redirect URI | wildcard를 최소화하고 production URL을 명확히 등록합니다. |
+| PKCE | public client와 browser/mobile client에는 PKCE를 강제합니다. |
+| Client secret | confidential client secret은 Secret manager 또는 Kubernetes Secret으로 관리합니다. |
+| Token claim | 필요한 claim만 mapper로 노출하고 PII/token size를 제한합니다. |
+| Role mapping | composite role과 group role 상속으로 과도한 권한이 생기지 않는지 검토합니다. |
+| Federation | LDAP/external provider timeout, imported user lifecycle, credential validation 위치를 결정합니다. |
+| Broker | 외부 IdP trust, account linking, email verified 처리, mapper를 검토합니다. |
+| Session lifespan | access/refresh/offline/session idle/max 정책을 서비스 위험도에 맞춥니다. |
+| Events | admin event와 user event 저장, retention, listener side effect를 audit 요구사항과 맞춥니다. |
 
-## 작업 범위 기록
+---
 
-이 문서는 분석과 문서화만 수행한다. Realm 설정, client 설정, protocol mapper, authentication flow, Java provider 코드는 수정하지 않는다.
+## 11. Non-Goals
+
+| 제외 항목 | 이유 |
+| --- | --- |
+| 실제 realm/client 설정값 확정 | 서비스별 보안 요구사항과 운영 모델이 필요합니다. |
+| token claim 표준 강제 | 애플리케이션 onboarding 정책에서 별도로 확정해야 합니다. |
+| LDAP/IdP source of truth 결정 | 조직의 HR/Directory 정책과 연결된 운영 결정입니다. |
+| custom authenticator/provider 구현 | 본 문서는 정책 모델 분석이며 구현은 별도 작업입니다. |
+
+---
+
+## 12. 기술 참조 보강
+
+| 주제 | 참조 |
+| --- | --- |
+| 모델 interface | `server-spi/src/main/java/org/keycloak/models/` |
+| OIDC mapper | `services/src/main/java/org/keycloak/protocol/oidc/mappers/` |
+| Admin resources | `services/src/main/java/org/keycloak/services/resources/admin/` |
+| Storage manager | `model/storage-private/src/main/java/org/keycloak/storage/` |
+| JPA model | `model/jpa/src/main/java/org/keycloak/models/jpa/` |
+| Infinispan sessions/cache | `model/infinispan/src/main/java/org/keycloak/models/sessions/infinispan/`, `model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/` |
+| LDAP federation | `federation/ldap/src/main/java/org/keycloak/storage/ldap/` |
+
+---
+
+## 13. 작업 범위 기록
+
+이 문서는 분석과 문서화만 수행합니다. Realm 설정, client 설정, protocol mapper, authentication flow, Java provider code는 수정하지 않습니다.

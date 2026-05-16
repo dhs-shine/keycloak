@@ -1,290 +1,239 @@
-# 개발, 빌드, 테스트 가이드
+# 개발, 빌드, 테스트 실행 계약
 
-> 네비게이션: [문서 색인](../README.md) | 이전: [UI, Operator, 테스트와 확장 지점](../30-integration/30-ui-operator-tests-and-extension-points.md) | 다음: [운영, 보안, 관측성](../50-operations/50-operations-security-observability.md)
-> 관련 문서: [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md), [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md)
+## 1. 개요
 
-작성일: 2026-05-16
+이 문서는 Keycloak repository에서 변경을 만들고 검증할 때 따르는 implementation contract입니다. 목표는 모든 변경을 같은 질문으로 분류하는 것입니다.
 
-최신 소스 재검증: 2026-05-16, `/Users/dhsshin/Documents/LLMOps/keycloak` 현재 작업트리 기준
+| 질문 | 판단 기준 |
+| --- | --- |
+| 무엇을 바꾸는가 | 서버 runtime, SPI/provider, storage, UI, Operator, 테스트, 문서 중 어느 표면인가 |
+| 언제 반영되는가 | compile-time, Quarkus build-time augmentation, startup, request runtime 중 어느 단계인가 |
+| 어디까지 검증하는가 | 변경 표면의 최소 test와 release gate가 무엇인가 |
+| 무엇을 건드리지 않는가 | docs-only, UI-only, Operator-only 변경처럼 runtime 영향이 없는 경계를 분리하는가 |
 
-## 목적
+Docs-only 변경은 runtime build/test를 기본 요구하지 않습니다. 대신 링크, stale file name, source path, Markdown placeholder를 검증합니다.
 
-이 문서는 Keycloak 저장소에서 개발자가 실제로 코드를 수정하고 검증할 때 필요한 빌드 명령, Maven profile, 테스트 실행 방식, 변경 유형별 작업 흐름을 정리한다.
+---
 
-## 사전 요구사항
+## 2. 핵심 계약
 
-| 항목 | 기준 | 근거 |
+| 계약 | 내용 |
+| --- | --- |
+| Maven wrapper 우선 | repository root의 `./mvnw`를 기준으로 build/test를 실행합니다. |
+| JDK release 기준 | source/target release는 root `pom.xml`의 `maven.compiler.release` 기준으로 판단합니다. |
+| JS build는 Maven에 포함 | root Maven build는 `js/pom.xml`의 frontend-maven-plugin 경로를 통해 Node/pnpm을 준비합니다. |
+| Quarkus build-time 변경 주의 | provider, theme, build-time option, persistence/cache 설정 변경은 re-augmentation 영향을 확인합니다. |
+| 신규 테스트 위치 | 신규 integration test는 가능한 `test-framework/`를 우선하고, legacy 유지보수는 `testsuite/` 문서를 따릅니다. |
+| Operator는 별도 배포물 | Operator 변경은 server dist build와 별도로 image, CRD, dependent resource, reconcile test를 검증합니다. |
+| 검증은 변경 범위 기반 | 전체 build보다 먼저 변경한 module과 인접 contract를 검증합니다. |
+
+---
+
+## 3. Toolchain 기준
+
+| 항목 | 기준 | 대표 근거 |
 | --- | --- | --- |
-| JDK | JDK 17, JDK 21, JDK 25 지원. 더 최신 JDK는 지원되지 않음 | `docs/building.md` |
-| Git | repository clone/build에 필요 | `docs/building.md` |
-| Maven | 로컬 Maven 대신 루트 `./mvnw` 사용 권장 | `docs/building.md` |
-| Maven version | root property 기준 `3.9.8` | `pom.xml` |
-| Java release | root compiler release `17` | `pom.xml` |
-| Node/Pnpm | JS Maven build가 Node `v24.9.0`, pnpm `10.14.0` 설치 | `js/pom.xml` |
-| Docker/Podman | DB, container, Operator, 일부 test-framework/testsuite 실행에 필요 | `test-framework/docs/RUNNING_TESTS.md`, `operator/README.md` |
+| JDK | JDK 17, 21, 25 범위 | `docs/building.md` |
+| Maven | root `./mvnw` | `docs/building.md`, `pom.xml` |
+| Maven version | root Maven wrapper/property 기준 | `pom.xml`, `.mvn/` |
+| Java release | `17` | `pom.xml` |
+| Node | Maven JS build가 관리 | `js/pom.xml` |
+| pnpm | Maven JS build와 `pnpm-workspace.yaml` 기준 | `js/pom.xml`, `js/pnpm-workspace.yaml` |
+| Docker/Podman | DB, browser, container, Operator, remote test에 필요 | `test-framework/docs/RUNNING_TESTS.md`, `operator/README.md` |
+| Kubernetes tooling | Operator local/remote test와 manifest 검증에 필요 | `operator/README.md` |
 
-## 빌드 명령 요약
+---
 
-| 목적 | 명령 | 설명 |
+## 4. Build Surface Map
+
+```mermaid
+flowchart TD
+  Root["root pom.xml"] --> Server["server/services/model modules"]
+  Root --> Quarkus["quarkus/deployment + runtime + dist"]
+  Root --> JS["js/ pnpm workspace"]
+  Root --> Themes["themes/"]
+  Root --> Tests["test-framework / tests / testsuite"]
+  Root --> Operator["operator/ profile/module"]
+
+  Quarkus --> Aug["build-time augmentation"]
+  JS --> AdminUI["Admin UI theme assets"]
+  JS --> AccountUI["Account UI theme assets"]
+  Themes --> Dist["server distribution"]
+  Operator --> Image["operator image + CRD manifests"]
+```
+
+| Build surface | 책임 | 검증 포인트 |
 | --- | --- | --- |
-| 테스트 생략 전체 빌드 | `./mvnw clean install -DskipTests` | 가장 기본적인 빠른 전체 compile/package 검증 |
-| 테스트 포함 전체 빌드 | `./mvnw clean install` | 오래 걸릴 수 있음 |
-| distribution profile 포함 | `./mvnw clean install -DskipTests -Pdistribution` | distribution 부가 산출물 포함 |
-| 서버만 빌드 | `./mvnw -pl quarkus/deployment,quarkus/dist -am -DskipTests clean install` | Quarkus server distribution 중심 빌드 |
-| Quarkus 최초 개발 빌드 | `../mvnw -f ../pom.xml clean install -DskipTestsuite -DskipExamples -DskipTests` | `quarkus/`에서 개발 전 local Maven cache 준비 |
-| Quarkus distribution 빌드 | `../mvnw clean install -DskipTests` | `quarkus/`에서 ZIP/TAR 생성 |
-| dist만 빌드 | `../mvnw -f dist/pom.xml clean install` | 기존 build 결과를 활용해 dist packaging |
-| Quarkus dev mode | `../mvnw -f server/pom.xml compile quarkus:dev -Dkc.config.built=true -Dquarkus.args="start-dev"` | `http://localhost:8080` 개발 서버 |
-| Quarkus dev mode suspend debug | `../mvnw -f server/pom.xml -Dsuspend=true compile quarkus:dev -Dkc.config.built=true -Dquarkus.args="start-dev"` | build step 초기 debug |
-| distribution debug | `kc.sh --debug start-dev` | 기본 localhost `8787` debug port |
-| JS 생략 | `-Dskip.npm` | JS workspace processing skip |
-| Operator 포함 | `./mvnw clean install -Poperator -DskipTests` | Operator는 기본 제외 가능성이 있어 profile 필요 |
-| proto lock skip | `-DskipProtoLock=true` | proxy 환경 등에서 proto compatibility check 실패 회피 |
+| Server core | SPI, services, storage, protocol, authentication | unit/integration test, request lifecycle 영향 |
+| Quarkus | runtime entrypoint, build steps, dist packaging | build-time option, provider discovery, startup |
+| JS workspace | Admin/Account UI, admin client, shared UI | TypeScript/Vite/pnpm build, i18n, route |
+| Themes | login/account/admin/email resources | theme verifier, resource path, content hash |
+| Test framework | JUnit 5 resource lifecycle | target server/db/browser supplier |
+| Legacy testsuite | existing Arquillian/model tests | 유지보수 범위의 profile과 browser/db setting |
+| Operator | CRD/controller/dependent resource | generated manifest, status, idempotency, image |
 
-## Maven profile 해석
+---
 
-| Profile/조건 | 동작 | 주의점 |
+## 5. Maven Command 계약
+
+| 목적 | 명령 | 사용 시점 |
 | --- | --- | --- |
-| `!skipTestsuite` | `testsuite` module 포함 | 테스트 실행을 skip해도 module aggregation 자체는 커질 수 있음 |
-| `!skipAdapters` | `adapters` module 포함 | adapter 관련 build가 필요 없으면 skip flag 고려 |
-| `!skipDocs` | `docs` module 포함 | 문서 빌드가 필요 없으면 skip flag 고려 |
-| `-Pdistribution` | `distribution` module 포함 | Quarkus dist와 별개로 SAML adapters/Galleon/license/downloads 성격 포함 |
-| `-Doperator` | `operator` module 포함 | IDE에서 Operator build 전 필요 |
-| `-Doperator-prod` | Operator production 성격 build | container/image 설정과 함께 검토 |
-| `-Dfips140-2` | FIPS crypto artifact 선택 | crypto provider와 운영 JDK/security provider 조건 확인 필요 |
+| 빠른 전체 compile/package | `./mvnw clean install -DskipTests` | 넓은 Java/Maven 변경 후 |
+| 테스트 포함 전체 build | `./mvnw clean install` | release gate 또는 큰 변경 후 |
+| distribution 포함 | `./mvnw clean install -DskipTests -Pdistribution` | server distribution packaging 확인 |
+| Quarkus dist 중심 | `./mvnw -pl quarkus/deployment,quarkus/dist -am -DskipTests clean install` | Quarkus server 배포물 영향 확인 |
+| JS build 제외 | `./mvnw clean install -DskipTests -Dskip.npm` | Java-only 확인이 목적일 때 |
+| Operator 포함 | `./mvnw clean install -Poperator -DskipTests` | Operator module/profile까지 IDE/build 인식 필요 시 |
+| proto lock 회피 | `-DskipProtoLock=true` | proxy/환경 문제로 proto compatibility check가 build를 막을 때만 |
 
-## 개발 서버 실행
-
-### Quarkus dev mode
-
-```bash
-cd quarkus
-../mvnw -f server/pom.xml compile quarkus:dev -Dkc.config.built=true -Dquarkus.args="start-dev"
-```
-
-특징:
-
-| 항목 | 내용 |
-| --- | --- |
-| 기본 URL | `http://localhost:8080` |
-| debug | port `5005` attach 가능 |
-| 자동 반영 | `quarkus/deployment`, `quarkus/runtime`, `quarkus/server` resource 변경 중심 |
-| 한계 | `keycloak-services` 같은 non-Quarkus module Java 변경은 Hot Swap에 의존 |
-| build-time option | `quarkus.args`만으로 반영되지 않으며 `-D` 또는 env와 재실행 필요 |
-
-### Distribution 실행
-
-```bash
-bin/kc.sh start-dev
-```
-
-또는 Windows:
-
-```bat
-bin\kc.bat start-dev
-```
-
-debug 실행:
-
-```bash
-kc.sh --debug start-dev
-```
-
-보안 주의:
-
-| 설정 | 주의 |
-| --- | --- |
-| `--debug` | 기본은 localhost `8787` |
-| `--debug 0.0.0.0:8787` | 모든 network interface에 debug port가 노출될 수 있음 |
-| `DEBUG_SUSPEND=y` | early bootstrap debug에 유용하지만 운영에서는 사용 금지 |
-
-## 테스트 실행 경로
-
-### 신규 test-framework
-
-| 목적 | 명령/설정 |
-| --- | --- |
-| 기본 test-framework test | 해당 module에서 `mvn test` |
-| embedded server | `KC_TEST_SERVER=embedded mvn test` |
-| distribution server | `KC_TEST_SERVER=distribution mvn test` |
-| remote server | `KC_TEST_SERVER=remote mvn test` |
-| Postgres DB | `KC_TEST_DATABASE=postgres mvn test` |
-| Chrome browser | `KC_TEST_BROWSER=chrome mvn test` |
-| server reuse | `KC_TEST_SERVER_REUSE=true` |
-| hot deploy | `KC_TEST_SERVER_HOT_DEPLOY=true` |
-
-설정 우선순위:
-
-| 순서 | Source |
-| --- | --- |
-| 1 | System properties |
-| 2 | Environment variables |
-| 3 | `.env.test` |
-| 4 | classpath `keycloak-test.properties` |
-| 5 | `KC_TEST_CONFIG`로 지정한 properties 파일 |
-
-### Legacy testsuite
-
-| 목적 | 명령 |
-| --- | --- |
-| integration-arquillian 전체 | `mvn -f testsuite/integration-arquillian/pom.xml clean install` |
-| 단일 테스트 | `mvn -f testsuite/integration-arquillian/pom.xml clean install -Dtest=LoginTest` |
-| Quarkus production mode | `mvn -f testsuite/integration-arquillian/pom.xml -Pauth-server-quarkus clean install` |
-| Quarkus embedded | `mvn -f testsuite/integration-arquillian/pom.xml -Pauth-server-quarkus-embedded clean install -Dtest=LoginTest` |
-| browser 지정 | `-Dbrowser=firefox` 또는 `-Dbrowser=chrome` |
-
-주의:
-
-| 항목 | 설명 |
-| --- | --- |
-| deprecated | `testsuite/DEPRECATED.md`에 따라 신규 테스트는 test-framework 우선 |
-| production mode 테스트 | 코드 변경 후 distribution rebuild 필요 가능 |
-| DB/browser 의존성 | Docker/Podman, Selenium/WebDriver, Chrome/Firefox 환경 영향 |
-
-### Test utilities
-
-| 목적 | 명령 |
-| --- | --- |
-| test Keycloak server | `mvn exec:java -Pkeycloak-server` from `testsuite/utils` |
-| realm import 포함 | `mvn exec:java -Pkeycloak-server -Dimport=testrealm.json` |
-| resources live edit | `mvn exec:java -Pkeycloak-server -Dresources` |
-| test mail server | `./mvnw -f testsuite/utils/pom.xml exec:java -Pmail-server` |
-| test LDAP server | `./mvnw -f testsuite/utils/pom.xml exec:java -Pldap` |
-| test Kerberos server | `mvn exec:java -Pkerberos` |
-
-## JS/UI 개발
-
-| 작업 | 명령/위치 |
-| --- | --- |
-| JS workspace build | `cd js && pnpm build` |
-| Maven에서 JS build 포함 | 루트 Maven build 기본 경로 |
-| Maven에서 JS skip | `-Dskip.npm` |
-| Admin UI dev server | `js/apps/admin-ui`, Vite port `5174` |
-| Account UI dev server | `js/apps/account-ui`, Vite port `5173` |
-| UI 개발용 Keycloak server | `js/apps/keycloak-server` |
-| Admin dev 연동 | `pnpm start --admin-dev` |
-| Account dev 연동 | `pnpm start --account-dev` |
-| local dist 연동 | `pnpm start --local` |
-
-개발 server 환경 변수 예:
-
-```text
-KC_ACCOUNT_VITE_URL=http://localhost:5173
-KC_ADMIN_VITE_URL=http://localhost:5174
-KC_FEATURES=login:v2,account:v3,admin-fine-grained-authz,transient-users,oid4vc-vci
-```
-
-## Operator 개발과 테스트
-
-| 목적 | 명령 |
-| --- | --- |
-| Operator image build | `mvn clean package -Dquarkus.container-image.build=true` in `operator/` |
-| Minikube quick start | `minikube start --addons ingress --cni cilium --cpus=max` |
-| target manifest 적용 | `kubectl create namespace keycloak && kubectl apply -k target` |
-| default namespace overlay | `kubectl apply -k overlays/default-namespace` |
-| remote operator tests | `mvn clean verify -Dquarkus.container-image.build=true -Dquarkus.container-image.tag=test -Dquarkus.kubernetes.image-pull-policy=IfNotPresent -Dtest.operator.deployment=remote` |
-| custom image tests | `./scripts/build-testing-docker-images.sh [SOURCE KEYCLOAK IMAGE TAG] [SOURCE KEYCLOAK IMAGE]` 후 `-Dtest.operator.custom.image=custom-keycloak:latest` |
-
-Operator test mode:
-
-| Mode | 설명 |
-| --- | --- |
-| `local_apiserver` | 기본값. jenvtest controlled API server와 local operator. 빠르지만 모든 테스트 불가 |
-| `local` | local cluster에 resource 배포, operator는 cluster 밖 local 실행 |
-| `remote` | operator image를 생성해 cluster 내부에 배포 |
-
-## 변경 유형별 작업 흐름
-
-### OIDC/token endpoint 변경
-
-| 단계 | 작업 |
-| --- | --- |
-| 1 | `services/src/main/java/org/keycloak/protocol/oidc/`에서 endpoint/grant/mapper 영향 범위 확인 |
-| 2 | `AuthorizationEndpoint`, `TokenEndpoint`, `TokenManager`, grant provider 중 실제 변경 지점 식별 |
-| 3 | client policy, CORS, event, token mapper, session 영향 확인 |
-| 4 | unit/integration test를 test-framework 또는 기존 testsuite 위치에 추가/수정 |
-| 5 | 변경 module 중심 Maven test와 필요한 distribution test 실행 |
-
-### Authentication flow 변경
-
-| 단계 | 작업 |
-| --- | --- |
-| 1 | `services/src/main/java/org/keycloak/authentication/`에서 authenticator/required action 위치 확인 |
-| 2 | `AuthenticationProcessor` lifecycle과 `LoginActionsService` action URL 영향을 확인 |
-| 3 | event, brute force protector, user session attach, required action 상태를 검토 |
-| 4 | browser/direct grant/required action 별 테스트 추가 |
-| 5 | UI/theme 변경이 필요한 경우 `themes/` 또는 `js/` 영향 확인 |
-
-### Storage/model 변경
-
-| 단계 | 작업 |
-| --- | --- |
-| 1 | `server-spi` model interface 변경 여부를 먼저 판단 |
-| 2 | `model/jpa` adapter/entity/provider 변경 필요 여부 확인 |
-| 3 | `model/storage-private` storage manager/datastore/cache 경유 여부 확인 |
-| 4 | DB schema 변경 시 `docs/updating-database-schema.md` 확인 |
-| 5 | cache invalidation, migration, test DB matrix 검증 |
-
-### Admin UI 변경
-
-| 단계 | 작업 |
-| --- | --- |
-| 1 | `js/apps/admin-ui/src`의 기능 디렉토리와 route 확인 |
-| 2 | `js/libs/keycloak-admin-client` resource method 필요 여부 확인 |
-| 3 | i18n message와 PatternFly component usage 확인 |
-| 4 | Vite dev server 또는 UI test 실행 |
-| 5 | Maven JS build와 theme packaging 영향 확인 |
-
-### Operator 변경
-
-| 단계 | 작업 |
-| --- | --- |
-| 1 | CRD spec/status 변경인지 controller/dependent resource 변경인지 구분 |
-| 2 | `operator/src/main/java/org/keycloak/operator/crds/`와 `controllers/` 영향 확인 |
-| 3 | generated CRD/manifests update 필요 여부 확인 |
-| 4 | `local_apiserver`, `local`, `remote` test mode 중 적절한 mode 선택 |
-| 5 | status reconciliation과 idempotency를 검증 |
-
-## IDE와 generated code 주의점
-
-| 주의점 | 설명 |
-| --- | --- |
-| Maven build 선행 | 일부 코드는 Maven plugin으로 생성되므로 IDE build만 먼저 실행하면 compile error 가능 |
-| IntelliJ rebuild 주의 | 전체 rebuild가 generated classes를 삭제할 수 있음 |
-| Operator profile | IDE에서 Operator를 인식하려면 `-Poperator` build가 필요 |
-| JS lockfile | `pnpm install --frozen-lockfile`로 lockfile 불일치가 build 실패를 유발할 수 있음 |
-| Proxy 환경 | proto lock compatibility check가 실패하면 `-DskipProtoLock=true` 검토 |
-
-## 검증 matrix
-
-| 변경 영역 | 최소 검증 | 추가 검증 |
+| Profile/조건 | 효과 | 주의점 |
 | --- | --- | --- |
-| Quarkus bootstrap/config | 관련 module Maven test, dev mode startup | distribution build, `kc.sh start-dev` |
-| OIDC/token | endpoint/grant unit/integration test | OIDC conformance, browser flow test |
-| Authentication | authenticator/required action test | browser UI flow, brute force, event assertion |
-| Storage/JPA | model/provider tests, DB migration test | Postgres/MySQL/MariaDB/MSSQL/Oracle matrix |
-| Infinispan/session | session tests | clustering tests, remote Infinispan |
+| `!skipTestsuite` | `testsuite` aggregation 포함 | 테스트 skip이어도 build graph가 커질 수 있습니다. |
+| `!skipAdapters` | adapters module 포함 | adapter 변경이 없으면 skip flag를 검토합니다. |
+| `!skipDocs` | docs module 포함 | docs build가 목적이 아니면 skip flag를 검토합니다. |
+| `-Pdistribution` | distribution 산출물 포함 | SAML adapters, Galleon, license/download 성격까지 커집니다. |
+| `-Poperator` | Operator module/profile 포함 | image/CRD 검증은 별도 명령이 필요합니다. |
+| `-Dfips140-2` | FIPS crypto artifact 선택 | 운영 JDK와 security provider 조건까지 같이 검토합니다. |
+
+---
+
+## 6. Quarkus 개발 서버 계약
+
+| 목적 | 위치 | 명령 |
+| --- | --- | --- |
+| 최초 local cache 준비 | `quarkus/` | `../mvnw -f ../pom.xml clean install -DskipTestsuite -DskipExamples -DskipTests` |
+| Quarkus dist build | `quarkus/` | `../mvnw clean install -DskipTests` |
+| dist packaging만 | `quarkus/` | `../mvnw -f dist/pom.xml clean install` |
+| dev mode | `quarkus/` | `../mvnw -f server/pom.xml compile quarkus:dev -Dkc.config.built=true -Dquarkus.args="start-dev"` |
+| dev mode debug | `quarkus/` | `../mvnw -f server/pom.xml -Dsuspend=true compile quarkus:dev -Dkc.config.built=true -Dquarkus.args="start-dev"` |
+| dist debug | built dist | `bin/kc.sh --debug start-dev` |
+
+| 경계 | 계약 |
+| --- | --- |
+| 기본 URL | dev mode의 기본 접속 지점은 `http://localhost:8080`입니다. |
+| debug port | Quarkus dev mode는 `5005`, dist `--debug`는 기본 `8787`을 사용합니다. |
+| Hot reload | Quarkus module/resource 변경 중심입니다. `keycloak-services` 등은 JVM Hot Swap 한계를 따릅니다. |
+| Build-time option | `quarkus.args`만으로 build-time option 변경이 반영된다고 가정하지 않습니다. |
+| Production 금지 | `start-dev`, remote debug, `DEBUG_SUSPEND=y`는 production 운영 방식이 아닙니다. |
+
+---
+
+## 7. Test Framework 계약
+
+```mermaid
+flowchart TD
+  Test["JUnit test"] --> Extension["@KeycloakIntegrationTest"]
+  Extension --> Server["KC_TEST_SERVER"]
+  Extension --> DB["KC_TEST_DATABASE"]
+  Extension --> Browser["KC_TEST_BROWSER"]
+  Extension --> Config["System property / env / .env.test / keycloak-test.properties / KC_TEST_CONFIG"]
+  Server --> Embedded["embedded"]
+  Server --> Distribution["distribution"]
+  Server --> Remote["remote"]
+```
+
+| 축 | 대표 값 | 사용 시점 |
+| --- | --- | --- |
+| Server | `embedded`, `distribution`, `remote` | 변경이 embedded로 충분한지 실제 dist/remote가 필요한지 결정합니다. |
+| Database | `dev-mem`, `dev-file`, `postgres`, `mysql`, `mariadb`, `mssql`, `oracle`, `tidb`, `remote` | storage/schema/transaction 영향에 맞춰 선택합니다. |
+| Browser | `htmlunit`, `chrome`, `chrome-headless`, `firefox`, `firefox-headless` | browser/authentication/UI flow 검증에 사용합니다. |
+| Reuse | `KC_TEST_SERVER_REUSE=true` | 반복 개발 속도를 높일 때 사용하되 상태 오염을 관리합니다. |
+| Hot deploy | `KC_TEST_SERVER_HOT_DEPLOY=true` | provider/theme 개발 중 빠른 피드백에 사용합니다. |
+
+| 설정 우선순위 |
+| --- |
+| System properties |
+| Environment variables |
+| `.env.test` |
+| classpath `keycloak-test.properties` |
+| `KC_TEST_CONFIG`로 지정한 properties file |
+
+Legacy `testsuite/`는 신규 테스트의 기본 위치가 아닙니다. 기존 Arquillian 기반 영역을 수정할 때만 `testsuite/integration-arquillian/HOW-TO-RUN.md`와 profile별 실행 문서를 따릅니다.
+
+---
+
+## 8. UI와 Operator 실행 계약
+
+| 영역 | 명령/위치 | 검증 기준 |
+| --- | --- | --- |
+| JS workspace | `js/`에서 pnpm command | package graph, lockfile, generated assets |
+| Admin UI dev server | `js/apps/admin-ui`, Vite port `5174` | route, admin client, i18n, auth context |
+| Account UI dev server | `js/apps/account-ui`, Vite port `5173` | account context, session, linked resource |
+| UI dev용 server | `js/apps/keycloak-server` | `pnpm start --admin-dev`, `--account-dev`, `--local` mode |
+| Maven JS skip | `-Dskip.npm` | Java-only build에서만 사용합니다. |
+| Operator package | `operator/`에서 `mvn clean package -Dquarkus.container-image.build=true` | image, generated manifests |
+| Operator remote test | `-Dtest.operator.deployment=remote` | cluster 내부 배포와 reconcile 검증 |
+
+| Operator test mode | 계약 |
+| --- | --- |
+| `local_apiserver` | 기본값입니다. envtest controlled API server와 local operator로 빠르게 검증합니다. |
+| `local` | local cluster에 resource를 배포하고 operator는 cluster 밖에서 실행합니다. |
+| `remote` | operator image를 만들고 cluster 내부에 배포합니다. image/tag/pull policy가 release gate가 됩니다. |
+
+---
+
+## 9. 변경 유형별 Workflow
+
+| 변경 유형 | 먼저 볼 것 | 최소 검증 |
+| --- | --- | --- |
+| OIDC/token endpoint | `AuthorizationEndpoint`, `TokenEndpoint`, `TokenManager`, grant provider | protocol test, client policy/CORS/event/token mapper 영향 |
+| Authentication flow | `AuthenticationProcessor`, authenticator, required action | browser/direct grant flow, event, brute force, session 영향 |
+| Storage/model | `server-spi`, `model/storage-private`, `model/jpa`, cache provider | provider tests, schema/cache invalidation, DB matrix 필요성 판단 |
+| Quarkus config/build | `KeycloakProcessor`, runtime mappers, `KeycloakMain` | augmentation, startup, dist build |
+| SPI/provider | SPI interface, `ProviderFactory`, provider lifecycle | factory registration, session lifecycle, timeout/failure policy |
+| Admin REST | `AdminRoot`, admin resource, permission evaluator | bearer auth, admin event, permission regression |
+| Admin/Account UI | route, admin client/keycloak-js, i18n | pnpm build/test, manual flow or browser test |
+| Theme | theme resource, descriptor, verifier | resource path, content hash, dist packaging |
+| Operator | CRD/spec/status, controller, dependent resource | generated CRD/manifest, idempotent reconcile, status condition |
+| Docs only | link/path/source citation | stale link, placeholder, Markdown hygiene |
+
+---
+
+## 10. Release Gate Matrix
+
+| 변경 영역 | 최소 gate | 추가 gate |
+| --- | --- | --- |
+| Docs only | stale link/path/placeholder check | Markdown lint 또는 doc build가 있는 경우 실행 |
+| Java service/protocol | affected Maven module tests | root `./mvnw clean install -DskipTests`, targeted integration test |
+| Quarkus dist/runtime | Quarkus module build | distribution build, `kc.sh start-dev` smoke |
+| Storage/JPA | provider/model tests | vendor DB matrix, migration/rollback 검증 |
+| Infinispan/session | session/cache tests | cluster/remote cache, sticky session smoke |
 | Admin API | Admin REST tests | Admin UI regression |
-| Admin UI/Account UI | pnpm build/test, Playwright if available | Maven root build with JS enabled |
-| Theme | theme verifier | manual browser check |
-| Operator | unit/local_apiserver tests | local/remote cluster tests |
-| Docs only | Markdown link/path sanity | no runtime test required unless docs include generated output |
+| JS UI/admin client | pnpm build/typecheck | browser/e2e, Maven build with JS enabled |
+| Theme | theme verifier | dist packaging and browser smoke |
+| Operator | unit/local_apiserver | local/remote cluster, image/tag/pull policy |
+| Test framework | target supplier test | server/db/browser matrix |
 
-## 파일 참조 색인
+---
 
-| 문서/파일 | 용도 |
+## 11. IDE와 Generated Code 주의점
+
+| 주의점 | 계약 |
 | --- | --- |
-| `docs/building.md` | source build, JDK, Maven wrapper, IDE 주의점 |
-| `docs/tests.md` | 기존 testsuite/test utils 실행 |
-| `quarkus/README.md` | Quarkus development mode, dist build, debug |
-| `test-framework/docs/README.md` | 신규 test framework index |
-| `test-framework/docs/RUNNING_TESTS.md` | test-framework server/database/browser 설정 |
-| `test-framework/docs/CONFIG.md` | test-framework 설정 우선순위 |
-| `testsuite/integration-arquillian/HOW-TO-RUN.md` | legacy integration-arquillian 실행 |
-| `js/README.md` | JS workspace 구조 |
-| `js/pom.xml` | Maven frontend build, Node/Pnpm version |
-| `operator/README.md` | Operator build/test/Minikube guide |
+| Maven build 선행 | 일부 source/resource는 Maven plugin이 생성하므로 IDE build만으로 판단하지 않습니다. |
+| IntelliJ rebuild | 전체 rebuild가 generated class/resource를 지울 수 있으므로 Maven build 결과를 확인합니다. |
+| Operator profile | IDE에서 Operator type/generated resource를 인식하려면 `-Poperator` build가 필요할 수 있습니다. |
+| JS lockfile | `pnpm install --frozen-lockfile` 실패는 dependency drift 신호입니다. lockfile을 임의 갱신하지 않습니다. |
+| Proto lock | `-DskipProtoLock=true`는 환경 문제 회피용입니다. compatibility 검증 자체를 없애는 결정으로 쓰지 않습니다. |
 
-## 작업 범위 기록
+---
 
-이 문서는 분석과 문서화만 수행한다. 빌드 스크립트, Maven 설정, 테스트 코드는 수정하지 않는다.
+## 12. 기술 참조 보강
+
+| 주제 | 참조 |
+| --- | --- |
+| Source build | `docs/building.md`, `pom.xml`, `.mvn/` |
+| Quarkus build/dev | `quarkus/README.md`, `quarkus/pom.xml`, `quarkus/server/pom.xml`, `quarkus/dist/pom.xml` |
+| Runtime entrypoint | `quarkus/runtime/src/main/java/org/keycloak/quarkus/runtime/KeycloakMain.java` |
+| Build-time processor | `quarkus/deployment/src/main/java/org/keycloak/quarkus/deployment/KeycloakProcessor.java` |
+| Test framework | `test-framework/docs/README.md`, `test-framework/docs/RUNNING_TESTS.md`, `test-framework/docs/CONFIG.md` |
+| Legacy testsuite | `testsuite/DEPRECATED.md`, `testsuite/integration-arquillian/HOW-TO-RUN.md` |
+| JS workspace | `js/README.md`, `js/package.json`, `js/pnpm-workspace.yaml`, `js/pom.xml` |
+| Themes | `themes/pom.xml`, `themes/src/main/resources/theme/`, `quarkus/dist/src/main/content/themes/README.md` |
+| Operator | `operator/README.md`, `operator/pom.xml`, `operator/src/main/resources/application.properties` |
+
+---
+
+## 13. 작업 범위 기록
+
+이 문서는 분석과 문서화만 수행합니다. Maven 설정, Java/TypeScript source, generated artifact, test runtime, Operator manifest는 수정하지 않습니다.

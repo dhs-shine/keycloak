@@ -1,240 +1,318 @@
-# 운영, 보안, 관측성
+# 운영, 보안, 관측성 계약
 
-> 네비게이션: [문서 색인](../README.md) | 이전: [개발/빌드/테스트 가이드](../40-implementation/40-development-build-test-guide.md) | 다음: [열린 결정 기록](../90-decisions/90-open-decision-register.md)
-> 관련 문서: [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md), [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md), [Realm/Client/User 정책 모델](../20-policy/20-realm-client-user-policy-model.md)
+## 1. 개요
 
-작성일: 2026-05-16
+이 문서는 Keycloak을 production Identity Control Plane으로 운영할 때 지켜야 하는 운영 계약을 정리합니다. 대상은 database, cache/session, TLS/hostname/proxy, Kubernetes/Operator, observability, backup/restore, security hardening, failure response입니다.
 
-최신 소스 재검증: 2026-05-16, `/Users/dhsshin/Documents/LLMOps/keycloak` 현재 작업트리 기준
+운영자가 먼저 기억해야 할 사실은 다음과 같습니다.
 
-## 목적
+| 사실 | 운영 의미 |
+| --- | --- |
+| Keycloak은 critical dependency입니다. | login, token refresh, Admin API, account flow 장애가 application 전체 장애로 번집니다. |
+| DB는 장부입니다. | realm/client/user/credential/key/event/session persistence의 source of truth입니다. |
+| Cache는 UX와 consistency입니다. | session continuity, cache invalidation, brute force state, login 중간 상태에 영향을 줍니다. |
+| Hostname은 보안 계약입니다. | issuer, redirect URI, JWKS URI, cookie domain, CORS 판단과 연결됩니다. |
+| Operator는 전부를 소유하지 않습니다. | Kubernetes resource reconciliation은 담당하지만 DB/cache/IdP/DNS/TLS/backup 전략은 별도 운영 계약입니다. |
 
-이 문서는 Keycloak을 production 관점에서 운영할 때 필요한 구성 요소와 위험 지점을 정리한다. DB/cache, Kubernetes/Operator, TLS/proxy, backup/restore, observability, 장애 모드, 보안 hardening을 다룬다.
+---
 
-## 운영 아키텍처
+## 2. 핵심 운영 계약
+
+| 영역 | 계약 | 실패 시 결과 |
+| --- | --- | --- |
+| Database | HA, backup, restore drill, migration guard를 갖춥니다. | startup/login/admin/token 5xx, 데이터 손실 |
+| Cache/session | multi-pod topology와 expiration policy를 token/session lifespan과 맞춥니다. | session loss, stale policy, login flow 실패 |
+| Hostname/proxy | 외부 URL, proxy header trust, TLS termination 경계를 명확히 합니다. | issuer mismatch, redirect loop, invalid cookie |
+| Secrets/key | DB secret, client secret, TLS cert, realm key material을 rotation 가능한 형태로 관리합니다. | token 검증 실패, secret exposure, 복구 불가 |
+| Federation/IdP | timeout, retry, degraded UX, account linking policy를 정합니다. | login/search 지연, broker login 실패 |
+| Observability | logs, metrics, traces, events/admin events를 장애 조사 가능 수준으로 켭니다. | 원인 분석 지연, audit gap |
+| Change control | realm/client/theme/provider/Operator 변경은 rollback과 smoke test를 동반합니다. | 정책 drift, 배포 후 인증 장애 |
+
+---
+
+## 3. Production Topology
 
 ```mermaid
 flowchart TD
-  User["Users / Browsers"] --> LB["Ingress / Load Balancer"]
-  Apps["Applications / APIs"] --> LB
-  LB --> KC1["Keycloak Pod 1"]
-  LB --> KC2["Keycloak Pod 2"]
+  User["Users / Browsers"] --> Edge["Ingress / Load Balancer"]
+  App["Applications / APIs"] --> Edge
+  Edge --> KC1["Keycloak Pod 1"]
+  Edge --> KC2["Keycloak Pod 2"]
+
   KC1 --> DB[("Relational DB")]
   KC2 --> DB
   KC1 --> Cache[("Infinispan local/remote cache")]
   KC2 --> Cache
-  KC1 --> LDAP["LDAP / External User Storage"]
+  KC1 --> LDAP["LDAP / User Storage"]
   KC2 --> LDAP
   KC1 --> IdP["External IdP"]
   KC2 --> IdP
   KC1 --> SMTP["SMTP"]
   KC2 --> SMTP
+
   KC1 --> Logs["Logs"]
   KC2 --> Logs
   KC1 --> Metrics["Metrics"]
   KC2 --> Metrics
-  KC1 --> Traces["Tracing"]
+  KC1 --> Traces["Traces"]
   KC2 --> Traces
+  KC1 --> Events["User/Admin Events"]
+  KC2 --> Events
+
   Operator["Keycloak Operator"] --> K8s["Kubernetes API"]
   Operator --> KC1
   Operator --> KC2
 ```
 
-## 운영 구성요소별 책임
-
-| 구성요소 | 책임 | 장애 영향 |
+| 구성요소 | 책임 | 책임이 아닌 것 |
 | --- | --- | --- |
-| Ingress/Load Balancer | TLS termination, routing, proxy headers, sticky 여부 | 잘못된 hostname/proxy header는 redirect/token issuer 문제 유발 |
-| Keycloak Pod | HTTP endpoint, authentication, token 발급, Admin API | pod 장애 시 replica로 우회 가능해야 함 |
-| Relational DB | realm/client/user/credential/event/persistent state | DB 장애는 대부분의 request 실패 또는 startup 실패로 이어짐 |
-| Infinispan | cache/session/single-use/login failure/cluster state | session loss, stale cache, login flow 실패 가능 |
-| External User Storage | LDAP/user federation | login/search/admin user operation 지연 또는 실패 |
-| External IdP | brokering/social/enterprise login | broker login 실패 |
-| SMTP | email verification/reset credentials | email 기반 required action 실패 |
-| Metrics/Logs/Tracing | 운영 관측 | 장애 원인 분석 능력 저하 |
-| Operator | Kubernetes resource reconciliation | rollout/update/realm import 자동화 실패 가능 |
+| Ingress/LB | TLS termination, routing, proxy header 주입, optional sticky session | realm/client policy 결정 |
+| Keycloak Pod | HTTP endpoint, authentication, token 발급, Admin API, event 생성 | DB/cache HA 자체 구현 |
+| Relational DB | 영속 policy/state 저장 | request latency 흡수용 cache |
+| Infinispan | cache, session, single-use object, login failure state | realm/client/user 영속 장부 |
+| External User Storage | LDAP/custom federation user lookup/credential validation | Keycloak local user storage 대체의 무조건적 fallback |
+| External IdP | broker/social/enterprise login trust source | Keycloak session/token lifecycle 소유 |
+| SMTP | email verification/reset credentials | authentication policy 결정 |
+| Operator | desired Kubernetes resource reconciliation | DNS/TLS/DB/cache/backup 전체 소유 |
 
-## Database 운영
+---
 
-| 영역 | 운영 기준 |
-| --- | --- |
-| DB vendor | 지원 DB와 드라이버 버전은 root `pom.xml`과 공식 문서 기준으로 관리한다. |
-| Schema migration | DB schema 변경 시 `docs/updating-database-schema.md`를 확인한다. |
-| Backup | realm/client/user/credential/event/session persistence 요구에 맞춰 정기 backup을 구성한다. |
-| Restore | restore 후 key rotation, session validity, external IdP/client secret consistency를 검증한다. |
-| Connection pool | traffic과 Admin API batch operation을 고려해 pool exhaustion을 모니터링한다. |
-| Event retention | event/admin event 저장을 켠 경우 DB growth와 retention을 관리한다. |
-| Persistent sessions | offline/persistent session 사용 여부에 따라 DB 용량과 cleanup 정책을 검토한다. |
+## 4. State와 Dependency 계약
 
-DB 관련 코드:
+| 상태/의존성 | 운영 기준 | 검증 포인트 |
+| --- | --- | --- |
+| Realm/client/user | DB backup과 migration guard의 핵심 대상 | restore 후 admin API와 login smoke |
+| Credential | password hash, WebAuthn, OTP, federation credential 경계 관리 | secret/key compatibility, login smoke |
+| Realm keys | signing/encryption key rotation과 active/passive key 관리 | JWKS, token validation, old token grace |
+| User session | SSO/offline/persistent session 정책과 cache/DB 저장 경계 확인 | refresh, logout, idle/max timeout |
+| Authentication session | login 중간 상태의 pod 이동/expiration 확인 | browser flow, redirect, sticky session |
+| Events/admin events | audit retention과 DB growth 관리 | event query, retention cleanup |
+| LDAP/user federation | timeout, import policy, cache, search filter 관리 | login/search latency, degraded mode |
+| External IdP | issuer, signature, metadata, mapper, account linking 검증 | broker login, token mapper, logout |
+| SMTP | TLS/auth/sender policy와 retry/alert 구성 | verify email, reset credentials |
 
-| 영역 | 파일 |
-| --- | --- |
-| Quarkus JPA config | `quarkus/deployment/src/main/java/org/keycloak/quarkus/deployment/KeycloakProcessor.java` |
-| Quarkus JPA provider | `quarkus/runtime/src/main/java/org/keycloak/quarkus/runtime/storage/database/jpa/QuarkusJpaConnectionProviderFactory.java` |
-| Default JPA provider | `model/jpa/src/main/java/org/keycloak/connections/jpa/DefaultJpaConnectionProviderFactory.java` |
-| JPA model providers | `model/jpa/src/main/java/org/keycloak/models/jpa/` |
-| JPA event store | `model/jpa/src/main/java/org/keycloak/events/jpa/` |
-| Persistent sessions | `model/jpa/src/main/java/org/keycloak/models/jpa/session/` |
+---
 
-## Cache/Infinispan 운영
+## 5. Database 운영 계약
 
 | 영역 | 운영 기준 |
 | --- | --- |
-| Realm/user cache | realm/client/role/group/user 변경 후 invalidation 전파가 정상이어야 한다. |
-| User session | multi-pod 환경에서 session state consistency를 보장해야 한다. |
-| Authentication session | browser login 중간 상태가 pod 간 이동에도 유지되어야 한다. |
-| Single-use object | action token/code 재사용 방지가 cluster-wide로 동작해야 한다. |
-| Login failure | brute force protection 상태가 pod-local로 갈라지지 않도록 확인한다. |
-| Remote cache | remote Infinispan 사용 시 latency, auth, TLS, topology를 점검한다. |
-| Expiration/eviction | token/session lifespan과 cache expiration mismatch가 없어야 한다. |
+| Vendor support | 지원 DB와 driver version은 repository와 공식 문서 기준으로 관리합니다. |
+| Schema migration | upgrade 전 `docs/updating-database-schema.md`와 release note를 확인합니다. |
+| Backup | DB snapshot/logical backup을 realm key, secrets, provider artifact와 같은 복구 단위로 묶습니다. |
+| Restore | restore 후 issuer/key/session/client secret/external IdP consistency를 검증합니다. |
+| Connection pool | Admin API batch, login burst, token refresh burst를 고려해 pool saturation을 alert합니다. |
+| Event retention | user/admin event 저장을 켠 경우 retention과 table growth를 운영 지표로 둡니다. |
+| Persistent sessions | offline/persistent session 사용 시 DB size와 cleanup 정책을 별도 계산합니다. |
 
-관련 파일:
-
-| 영역 | 파일 |
+| DB 관련 구현 위치 | 목적 |
 | --- | --- |
-| Infinispan connection | `model/infinispan/src/main/java/org/keycloak/connections/infinispan/` |
-| Realm/user cache | `model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/` |
-| Session provider | `model/infinispan/src/main/java/org/keycloak/models/sessions/infinispan/` |
-| Remote session provider | `model/infinispan/src/main/java/org/keycloak/models/sessions/infinispan/remote/` |
-| Cluster provider | `model/infinispan/src/main/java/org/keycloak/cluster/infinispan/` |
+| `quarkus/deployment/src/main/java/org/keycloak/quarkus/deployment/KeycloakProcessor.java` | persistence unit build-time 구성 |
+| `quarkus/runtime/src/main/java/org/keycloak/quarkus/runtime/storage/database/jpa/QuarkusJpaConnectionProviderFactory.java` | Quarkus JPA connection provider |
+| `model/jpa/src/main/java/org/keycloak/connections/jpa/DefaultJpaConnectionProviderFactory.java` | default JPA provider factory |
+| `model/jpa/src/main/java/org/keycloak/models/jpa/` | realm/client/user/role 등 JPA model adapter |
+| `model/jpa/src/main/java/org/keycloak/events/jpa/` | JPA event store |
+| `model/jpa/src/main/java/org/keycloak/models/jpa/session/` | persistent session 영역 |
 
-## TLS, hostname, proxy boundary
+---
+
+## 6. Cache와 Session 운영 계약
+
+| Cache 영역 | 운영 기준 | 실패 신호 |
+| --- | --- | --- |
+| Realm/user cache | admin 변경 후 invalidation이 pod 전체에 전파되어야 합니다. | stale realm/client/user 설정 |
+| User session | multi-pod 환경에서 refresh/logout/session lookup이 일관되어야 합니다. | refresh 실패, logout 미전파 |
+| Authentication session | browser login 중간 상태가 redirect와 pod 이동을 견뎌야 합니다. | login restart, invalid code |
+| Single-use object | action token/code 재사용 방지가 cluster-wide로 동작해야 합니다. | token/code replay 가능성 |
+| Login failure | brute force protection 상태가 pod-local로 갈라지지 않아야 합니다. | lockout 불일치, abuse 탐지 누락 |
+| Remote cache | auth/TLS/latency/topology/owner 설정을 운영 지표로 둡니다. | cache timeout, topology warning |
+| Expiration | access/refresh/offline/session lifespan과 cache expiration을 맞춥니다. | 예상보다 빠른 session loss |
+
+| Cache 관련 구현 위치 | 목적 |
+| --- | --- |
+| `model/infinispan/src/main/java/org/keycloak/connections/infinispan/` | Infinispan connection/provider |
+| `model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/` | realm/user cache |
+| `model/infinispan/src/main/java/org/keycloak/models/sessions/infinispan/` | user/authentication session provider |
+| `model/infinispan/src/main/java/org/keycloak/models/sessions/infinispan/remote/` | remote session provider |
+| `model/infinispan/src/main/java/org/keycloak/cluster/infinispan/` | cluster provider |
+
+---
+
+## 7. Hostname, TLS, Proxy Boundary
+
+```mermaid
+flowchart LR
+  Browser["Browser"] --> HTTPS["External HTTPS URL"]
+  HTTPS --> Ingress["Trusted proxy / ingress"]
+  Ingress --> KC["Keycloak HTTP listener"]
+  KC --> Issuer["issuer / redirect / cookie / JWKS"]
+```
 
 | 항목 | 운영 기준 |
 | --- | --- |
-| External URL | issuer, redirect URI, admin URL, account URL이 외부 공개 hostname과 일치해야 한다. |
-| TLS termination | Ingress에서 TLS 종료 시 Keycloak proxy/hostname 설정과 header trust를 맞춘다. |
-| `X-Forwarded-*` | 신뢰할 수 있는 proxy에서만 주입되도록 네트워크 경계를 구성한다. |
-| Admin URL | frontend URL과 admin URL 분리 시 redirect 정보 누출/접근 경계를 검토한다. |
-| HTTPS required | realm SSL policy와 production TLS topology가 충돌하지 않아야 한다. |
-| Debug port | `--debug 0.0.0.0:*` 같은 설정은 production에서 금지한다. |
+| External URL | discovery issuer, token `iss`, redirect URI, admin/account URL이 외부 공개 hostname과 일치해야 합니다. |
+| TLS termination | Ingress/LB에서 TLS를 종료하면 Keycloak hostname/proxy 설정과 trusted header 경계를 맞춥니다. |
+| Proxy headers | `X-Forwarded-*` 또는 forwarding header는 신뢰 가능한 proxy에서만 들어오게 합니다. |
+| Admin URL | frontend URL과 admin URL을 분리하면 접근 제어와 URL 노출을 함께 검토합니다. |
+| HTTPS policy | realm SSL policy와 production TLS topology가 충돌하지 않아야 합니다. |
+| Debug/dev mode | `start-dev`, remote debug, `--debug 0.0.0.0:*`는 production에서 금지합니다. |
 
-## Kubernetes/Operator 운영
+최소 smoke test는 discovery endpoint의 `issuer`와 실제 token의 `iss`가 같은 외부 URL을 가리키는지 확인하는 것입니다.
+
+---
+
+## 8. Kubernetes와 Operator 운영 계약
 
 | 영역 | 운영 기준 |
 | --- | --- |
-| CRD version | `v2beta1` Keycloak/RealmImport와 `v2alpha1` client CR의 maturity 차이를 이해한다. |
-| Reconciliation | controller/dependent resource가 idempotent하게 동작해야 한다. |
-| Pause annotation | `operator.keycloak.org/pause` 사용 시 status와 drift를 수동 관리한다. |
-| Keycloak image | `kc.operator.keycloak.image` 또는 CR spec image를 명확히 관리한다. |
-| Update strategy | image/config 변경 시 recreate/rolling/update job 전략을 사전에 검토한다. |
-| Secrets | admin secret, DB secret, TLS secret, client secret을 Kubernetes Secret으로 관리한다. |
-| NetworkPolicy | DB/cache/LDAP/IdP/SMTP/metrics endpoint 접근을 최소화한다. |
-| ServiceMonitor | metrics 수집을 켜는 경우 Prometheus operator와 label/namespace를 맞춘다. |
+| CRD maturity | `v2beta1` Keycloak/RealmImport와 `v2alpha1` client CR의 maturity 차이를 구분합니다. |
+| Reconciliation | controller와 dependent resource는 idempotent해야 합니다. |
+| Pause | `operator.keycloak.org/pause` 사용 시 drift와 status를 수동 관리합니다. |
+| Image | `kc.operator.keycloak.image` 또는 CR spec image를 release artifact와 연결합니다. |
+| Update strategy | image/config/provider/theme 변경 시 rolling/recreate/update job 전략을 사전에 정합니다. |
+| Secrets | admin, DB, TLS, client secret은 Kubernetes Secret lifecycle과 rotation 절차에 묶습니다. |
+| NetworkPolicy | DB/cache/LDAP/IdP/SMTP/metrics endpoint 접근을 최소 권한으로 제한합니다. |
+| ServiceMonitor | metrics 수집은 Prometheus operator label/namespace 정책과 일치시킵니다. |
 
-Operator 관련 파일:
-
-| 영역 | 파일 |
+| Operator 관련 구현 위치 | 목적 |
 | --- | --- |
-| Operator config | `operator/src/main/resources/application.properties` |
-| Keycloak controller | `operator/src/main/java/org/keycloak/operator/controllers/KeycloakController.java` |
-| Realm import controller | `operator/src/main/java/org/keycloak/operator/controllers/KeycloakRealmImportController.java` |
-| Dependent resources | `operator/src/main/java/org/keycloak/operator/controllers/*DependentResource.java` |
-| Update logic | `operator/src/main/java/org/keycloak/operator/update/` |
-| Kustomize manifests | `operator/src/main/kubernetes/` |
+| `operator/src/main/resources/application.properties` | Operator runtime config |
+| `operator/src/main/java/org/keycloak/operator/controllers/KeycloakController.java` | Keycloak CR reconcile 중심 |
+| `operator/src/main/java/org/keycloak/operator/controllers/KeycloakRealmImportController.java` | realm import reconcile |
+| `operator/src/main/java/org/keycloak/operator/controllers/*DependentResource.java` | Kubernetes dependent resource 생성/갱신 |
+| `operator/src/main/java/org/keycloak/operator/update/` | update strategy |
+| `operator/src/main/kubernetes/` | generated/kustomize manifest |
 
-## Observability
+---
 
-### Logs
+## 9. Observability 계약
 
-| 관측 대상 | 남겨야 하는 정보 |
+### 9.1 Logs
+
+| 관측 대상 | 필요한 정보 |
 | --- | --- |
 | Startup | profile, features, DB/cache config, provider loading, migration status |
 | Login failure | realm, client, event type, error, user hint, brute force state |
-| Token failure | grant type, client id, error, CORS/origin, DPoP/PKCE 관련 reason |
-| Admin mutation | realm, resource type, operation type, admin user/client, status |
+| Token failure | grant type, client id, error, origin/CORS, DPoP/PKCE reason |
+| Admin mutation | realm, resource type, operation, admin user/client, status |
 | Federation | provider id, operation, timeout/error, imported user handling |
 | Cache/cluster | topology, invalidation, remote cache connectivity |
 | Operator | reconcile request, dependent resource result, status condition, requeue reason |
 
-### Metrics
+### 9.2 Metrics
 
 | Metric 영역 | 목적 |
 | --- | --- |
-| HTTP request latency/error | endpoint별 성능/오류 감지 |
+| HTTP latency/error | endpoint별 성능/오류 감지 |
 | DB connection pool | pool saturation과 DB 장애 감지 |
-| Cache/cluster health | Infinispan 장애와 session/cache 이상 감지 |
+| Cache/cluster health | Infinispan/session/cache 이상 감지 |
 | Login/token rate | 인증 부하와 abuse 감지 |
 | Failed login/brute force | 공격 시도와 lockout 정책 확인 |
 | JVM memory/GC/thread | pod sizing과 leak 감지 |
 | Operator reconcile | reconciliation 실패/지연 감지 |
 
-### Events/Audit
+### 9.3 Events/Audit
 
-| Event | 활용 |
+| Event surface | 활용 |
 | --- | --- |
 | User event | LOGIN, LOGIN_ERROR, REGISTER, LOGOUT, CODE_TO_TOKEN 등 사용자 활동 audit |
 | Admin event | realm/client/user/role/group/config 변경 audit |
 | Event listener | log/email/custom sink 전송 |
 | Event store | DB 기반 조회와 retention 관리 |
 
-관련 파일:
-
-| 영역 | 파일 |
+| Event 관련 구현 위치 | 목적 |
 | --- | --- |
-| Event SPI | `server-spi-private/src/main/java/org/keycloak/events/` |
-| Logging listener | `services/src/main/java/org/keycloak/events/log/` |
-| Email listener | `services/src/main/java/org/keycloak/events/email/` |
-| JPA event store | `model/jpa/src/main/java/org/keycloak/events/jpa/` |
-| Admin event builder | `services/src/main/java/org/keycloak/services/resources/admin/AdminEventBuilder.java` |
+| `server-spi-private/src/main/java/org/keycloak/events/` | Event SPI/model |
+| `services/src/main/java/org/keycloak/events/log/` | logging event listener |
+| `services/src/main/java/org/keycloak/events/email/` | email event listener |
+| `model/jpa/src/main/java/org/keycloak/events/jpa/` | JPA event store |
+| `services/src/main/java/org/keycloak/services/resources/admin/AdminEventBuilder.java` | admin event 생성 |
 
-## 보안 hardening checklist
+---
 
-| 영역 | 체크 |
+## 10. Security Hardening Controls
+
+| 영역 | 운영 control |
 | --- | --- |
-| Admin account | bootstrap/admin credential을 임시로만 사용하고 production secret rotation을 적용한다. |
-| Client redirect | wildcard redirect URI를 최소화한다. |
-| Public clients | PKCE를 강제하고 implicit flow 사용을 제한한다. |
-| Confidential clients | secret/private key를 안전하게 저장하고 rotation 절차를 둔다. |
-| Token mapper | 민감 attribute와 group/role 과다 노출을 제한한다. |
-| Token lifespan | access/refresh/offline token lifespan을 위험도에 맞춘다. |
-| Session | idle/max session 정책과 SSO/offline session 정책을 검토한다. |
-| Brute force | brute force detection과 lockout 정책을 활성화한다. |
-| Email | SMTP TLS/auth와 sender spoofing 방지 정책을 적용한다. |
-| LDAP | LDAPS, bind credential secret, search filter, timeout을 관리한다. |
-| External IdP | issuer, signature, mapper, account linking 정책을 검증한다. |
-| Operator RBAC | Operator service account 권한을 필요한 namespace/resource로 제한한다. |
-| Debug | remote debug와 dev mode는 production에서 금지한다. |
-| Logs | token, password, client secret, session cookie가 로그에 남지 않게 한다. |
+| Admin account | bootstrap/admin credential은 임시로 쓰고 production secret rotation을 적용합니다. |
+| Client redirect | wildcard redirect URI를 최소화하고 app별 allowlist를 둡니다. |
+| Public clients | PKCE를 강제하고 implicit flow 사용을 제한합니다. |
+| Confidential clients | secret/private key를 안전하게 저장하고 rotation 절차를 둡니다. |
+| Token mapper | 민감 attribute, group/role 과다 노출, token size 증가를 제한합니다. |
+| Token lifespan | access/refresh/offline token lifespan을 risk profile에 맞춥니다. |
+| Session | idle/max session과 SSO/offline session 정책을 검토합니다. |
+| Brute force | brute force detection과 lockout 정책을 활성화하고 alert와 연결합니다. |
+| Email | SMTP TLS/auth와 sender spoofing 방지 정책을 적용합니다. |
+| LDAP | LDAPS, bind credential secret, search filter, timeout을 관리합니다. |
+| External IdP | issuer, signature, mapper, account linking 정책을 검증합니다. |
+| Operator RBAC | service account 권한을 필요한 namespace/resource로 제한합니다. |
+| Debug | remote debug와 dev mode는 production에서 금지합니다. |
+| Logs | token, password, client secret, session cookie가 로그에 남지 않게 합니다. |
 
-## 장애 모드와 대응
+---
 
-| 장애 | 증상 | 대응 |
-| --- | --- | --- |
-| DB down | startup 실패, login/admin/token 5xx | DB HA/failover, readiness, connection pool alert, backup restore 절차 |
-| DB migration failure | startup 중 schema update 실패 | migration log 확인, schema backup, rollback plan |
-| Infinispan cluster split | session loss, stale cache, inconsistent login | cluster topology 확인, cache mode/remote cache health 점검 |
-| LDAP timeout | login/search/admin user operation 지연 | provider timeout, circuit breaker 성격 운영, user import policy 검토 |
-| External IdP down | broker login 실패 | IdP health, fallback login path, error UX |
-| SMTP down | email verify/reset 실패 | retry/alert, required action 운영 공지 |
-| Wrong hostname/proxy | redirect URI/issuer mismatch, cookie issue | hostname/proxy/TLS header 재검증 |
-| Token key rotation issue | client token validation 실패 | JWKS cache, active/passive keys, rotation 절차 점검 |
-| Operator reconcile failure | CR status degraded, resource drift | operator logs/status condition, dependent resource diff 확인 |
-| JS/theme packaging issue | Admin/Account UI resource 404 | theme JAR, content hash, `providers` build/re-augmentation 확인 |
+## 11. Failure Policy
 
-## Backup/restore 기준
+| 장애 | 사용자 증상 | 즉시 확인 | 복구 기준 |
+| --- | --- | --- | --- |
+| DB down | startup 실패, login/admin/token 5xx | DB health, connection pool, migration log | pod readiness 회복, login/token smoke 통과 |
+| DB migration failure | upgrade startup 중 schema 오류 | Liquibase/migration log, schema backup | rollback 또는 migration 완료 후 startup 통과 |
+| Cache split/timeout | session loss, stale cache, inconsistent login | Infinispan topology, remote cache health | refresh/logout/login flow 정상화 |
+| LDAP timeout | login/search/admin user operation 지연 | provider timeout, bind/search error | login/search latency 회복, error 감소 |
+| External IdP down | broker login 실패 | IdP metadata, token endpoint, signature error | broker login과 account linking 정상화 |
+| SMTP down | verify/reset email 실패 | SMTP auth/TLS/connectivity | email required action smoke 통과 |
+| Wrong hostname/proxy | redirect loop, issuer mismatch, cookie issue | discovery issuer, token `iss`, forwarded headers | discovery/token/browser flow URL 일치 |
+| Key rotation issue | application token validation 실패 | JWKS, active/passive keys, client cache | old/new token validation window 정상화 |
+| Operator reconcile failure | CR degraded, resource drift | operator logs, status condition, dependent resource diff | CR status ready와 desired resource 일치 |
+| Provider/theme packaging issue | startup error, UI 404, missing provider | provider loading log, theme resource path | startup/theme smoke 통과 |
+
+---
+
+## 12. Backup/Restore 계약
 
 | 대상 | 필요성 | 주의점 |
 | --- | --- | --- |
-| Relational DB | realm/client/user/credential/event/session 영속 데이터 | 가장 중요한 backup 대상 |
-| Key material | realm signing/encryption keys | token validation과 federation trust에 영향 |
-| Kubernetes Secrets | DB credentials, client secrets, TLS certs | secret rotation과 restore 순서 필요 |
-| Realm export | migration/검증/부분 복구 보조 | DB backup 대체가 아니라 보조 수단으로 봐야 함 |
-| Operator CR | desired state 복원 | CR과 Secret/DB 상태 consistency 필요 |
-| Custom providers/themes | `/providers` 배포 artifact | version compatibility와 build/re-augmentation 필요 |
+| Relational DB | realm/client/user/credential/event/session 영속 데이터 | 가장 중요한 backup 대상입니다. |
+| Realm key material | token signing/encryption trust | key rotation 상태와 같이 복구해야 합니다. |
+| Kubernetes Secrets | DB credential, client secret, TLS cert | secret rotation과 restore 순서가 필요합니다. |
+| Realm export | migration/검증/부분 복구 보조 | DB backup 대체물이 아닙니다. |
+| Operator CR | desired state 복원 | CR, Secret, DB 상태 consistency를 맞춰야 합니다. |
+| Custom providers/themes | `/providers` 배포 artifact | Keycloak version/build-time augmentation과 맞아야 합니다. |
+| External IdP metadata | federation/broker trust | certificate, issuer, mapper drift를 확인합니다. |
 
-## 운영 체크리스트
+---
 
-| 단계 | 체크 |
+## 13. 운영 Validation Commands
+
+| 단계 | 확인 | 예시 |
+| --- | --- | --- |
+| 배포 전 | DB/cache/hostname/TLS/proxy/secret/token lifespan/redirect URI 점검 | release checklist |
+| 배포 중 | readiness, startup log, migration log, provider loading log 확인 | `kubectl logs`, readiness probe |
+| 배포 후 | discovery issuer 확인 | `curl -s https://<host>/realms/<realm>/.well-known/openid-configuration` |
+| 배포 후 | JWKS 조회 | `curl -s https://<host>/realms/<realm>/protocol/openid-connect/certs` |
+| 배포 후 | login/token/admin/account UI smoke | browser/API smoke |
+| 변경 후 | event/admin event, cache invalidation, user session 영향 확인 | event query, admin change smoke |
+| 정기 운영 | DB restore, key rotation, secret rotation, security update drill | scheduled drill |
+
+---
+
+## 14. 기술 참조 보강
+
+| 주제 | 참조 |
 | --- | --- |
-| 배포 전 | DB/cache/hostname/TLS/proxy/secret/token lifespan/redirect URI 검증 |
-| 배포 중 | readiness, startup log, migration log, provider loading log 확인 |
-| 배포 후 | login, token, admin API, account UI, JWKS, metrics, events smoke test |
-| 변경 전 | realm/client/theme/provider/Operator 변경 영향 범위와 rollback 준비 |
-| 변경 후 | event/admin event, cache invalidation, user session 영향 확인 |
-| 정기 운영 | DB backup restore drill, key rotation drill, secret rotation, dependency/security update |
+| Health mappers | `quarkus/runtime/src/main/java/org/keycloak/quarkus/runtime/configuration/mappers/HealthPropertyMappers.java` |
+| Metrics mappers | `quarkus/runtime/src/main/java/org/keycloak/quarkus/runtime/configuration/mappers/MetricsPropertyMappers.java` |
+| Hostname mappers | `quarkus/runtime/src/main/java/org/keycloak/quarkus/runtime/configuration/mappers/HostnameV2PropertyMappers.java` |
+| Database options | `quarkus/config-api/src/main/java/org/keycloak/config/DatabaseOptions.java` |
+| Cache options | `quarkus/config-api/src/main/java/org/keycloak/config/CachingOptions.java` |
+| Brute force protector | `services/src/main/java/org/keycloak/services/managers/DefaultBruteForceProtector.java` |
+| CORS | `services/src/main/java/org/keycloak/services/cors/DefaultCors.java` |
+| Load balancer resource | `services/src/main/java/org/keycloak/services/resources/LoadBalancerResource.java` |
+| Operator config | `operator/src/main/resources/application.properties` |
+| Operator controllers | `operator/src/main/java/org/keycloak/operator/controllers/` |
 
-## 작업 범위 기록
+---
 
-이 문서는 분석과 문서화만 수행한다. Kubernetes manifest, Operator code, server config, 운영 스크립트는 수정하지 않는다.
+## 15. 작업 범위 기록
+
+이 문서는 분석과 문서화만 수행합니다. Kubernetes manifest, Operator code, server config, secret, 운영 script는 수정하지 않습니다.
