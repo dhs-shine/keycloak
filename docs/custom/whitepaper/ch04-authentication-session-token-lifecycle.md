@@ -151,8 +151,17 @@ Keycloak이 token을 발급했다고 해서 API가 자동으로 안전해지는 
 
 ---
 
-| 방향 | 문서 |
+## 관련 문서
+
+| 목적 | 문서 |
 | --- | --- |
-| **이전 챕터** | [Ch.3 Realm, Client, Role 정책 모델](./ch03-identity-policy-model.md) |
-| **다음 챕터** | [Ch.5 Federation과 Identity Brokering](./ch05-federation-and-brokering.md) |
-| **백서 홈** | [WHITEPAPER.md](../WHITEPAPER.md) |
+| 요청 lifecycle 상세 | [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) |
+| token/session 정책 | [Realm, Client, User 정책 모델](../20-policy/20-realm-client-user-policy-model.md) |
+| 운영 session 기준 | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) |
+| 다음 federation 흐름 | [Ch.5 Federation과 Identity Brokering](./ch05-federation-and-brokering.md) |
+
+## 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [Ch.3 Realm, Client, Role 정책 모델](./ch03-identity-policy-model.md) | [Ch.5 Federation과 Identity Brokering](./ch05-federation-and-brokering.md) | [백서 홈](../WHITEPAPER.md) |

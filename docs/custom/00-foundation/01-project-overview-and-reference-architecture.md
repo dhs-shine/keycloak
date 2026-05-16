@@ -39,8 +39,8 @@ Keycloak은 이 문제를 중앙 Identity Control Plane으로 모읍니다. 이 
 | OIDC authorization code/token endpoint 세부 흐름 | [10 서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) |
 | realm/client/user/role/token 정책 설계 | [20 Realm/Client/User 정책 모델](../20-policy/20-realm-client-user-policy-model.md) |
 | UI, Operator, test framework 세부 구조 | [30 UI, Operator, 테스트와 확장 지점](../30-integration/30-ui-operator-tests-and-extension-points.md) |
-| 실제 빌드/테스트 명령과 변경 유형별 workflow | [40 개발/빌드/테스트 가이드](../40-implementation/40-development-build-test-guide.md) |
-| 운영, 보안, 백업, 장애 대응 | [50 운영, 보안, 관측성](../50-operations/50-operations-security-observability.md) |
+| 실제 빌드/테스트 명령과 변경 유형별 workflow | [개발, 빌드, 테스트 실행 계약](../40-implementation/40-development-build-test-guide.md) |
+| 운영, 보안, 백업, 장애 대응 | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) |
 
 ---
 
@@ -170,3 +170,21 @@ flowchart LR
 ## 10. 작업 범위 기록
 
 이 문서는 분석과 문서화만 수행합니다. Keycloak runtime code, Maven 설정, Operator manifest, 테스트 코드는 수정하지 않습니다.
+
+---
+
+## 11. 관련 문서
+
+| 목적 | 문서 |
+| --- | --- |
+| 설계 철학 | [백서 Ch.1 설계 철학과 첫 번째 원칙](../whitepaper/ch01-design-philosophy.md) |
+| 신뢰 경계 | [백서 Ch.2 시스템 토폴로지와 신뢰 경계](../whitepaper/ch02-system-topology.md) |
+| 서버 런타임 상세 | [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) |
+| 정책 모델 상세 | [Realm, Client, User 정책 모델](../20-policy/20-realm-client-user-policy-model.md) |
+| 운영 기준 | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) |
+
+## 12. 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [문서 색인](../README.md) | [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) | [문서 색인](../README.md) |

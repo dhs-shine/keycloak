@@ -237,3 +237,21 @@ Legacy `testsuite/`는 신규 테스트의 기본 위치가 아닙니다. 기존
 ## 13. 작업 범위 기록
 
 이 문서는 분석과 문서화만 수행합니다. Maven 설정, Java/TypeScript source, generated artifact, test runtime, Operator manifest는 수정하지 않습니다.
+
+---
+
+## 14. 관련 문서
+
+| 목적 | 문서 |
+| --- | --- |
+| SPI와 Quarkus 배경 | [백서 Ch.6 SPI, Provider, Quarkus 런타임](../whitepaper/ch06-extension-runtime-model.md) |
+| Release와 운영 안정성 | [백서 Ch.7 Release, Operator, 운영 안정성](../whitepaper/ch07-release-and-operations.md) |
+| 서버 runtime 구조 | [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) |
+| UI/Operator/test surface | [UI, Operator, 테스트와 확장 지점](../30-integration/30-ui-operator-tests-and-extension-points.md) |
+| 운영 release gate | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) |
+
+## 15. 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [UI, Operator, 테스트와 확장 지점](../30-integration/30-ui-operator-tests-and-extension-points.md) | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) | [문서 색인](../README.md) |

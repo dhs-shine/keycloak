@@ -114,13 +114,13 @@ Keycloak의 핵심은 모든 애플리케이션을 무지하게 만드는 것이
 | 백서 챕터 | 기존 참조 문서 |
 | --- | --- |
 | Ch.1 | [프로젝트 개요와 기준 아키텍처](00-foundation/01-project-overview-and-reference-architecture.md) |
-| Ch.2 | [프로젝트 개요와 기준 아키텍처](00-foundation/01-project-overview-and-reference-architecture.md), [운영, 보안, 관측성](50-operations/50-operations-security-observability.md) |
+| Ch.2 | [프로젝트 개요와 기준 아키텍처](00-foundation/01-project-overview-and-reference-architecture.md), [운영, 보안, 관측성 계약](50-operations/50-operations-security-observability.md) |
 | Ch.3 | [Realm/Client/User 정책 모델](20-policy/20-realm-client-user-policy-model.md) |
-| Ch.4 | [서버 런타임과 요청 생명주기](10-architecture/10-server-runtime-and-request-lifecycle.md), [운영, 보안, 관측성](50-operations/50-operations-security-observability.md) |
+| Ch.4 | [서버 런타임과 요청 생명주기](10-architecture/10-server-runtime-and-request-lifecycle.md), [운영, 보안, 관측성 계약](50-operations/50-operations-security-observability.md) |
 | Ch.5 | [Realm/Client/User 정책 모델](20-policy/20-realm-client-user-policy-model.md), [UI, Operator, 테스트와 확장 지점](30-integration/30-ui-operator-tests-and-extension-points.md) |
-| Ch.6 | [서버 런타임과 요청 생명주기](10-architecture/10-server-runtime-and-request-lifecycle.md), [개발/빌드/테스트 가이드](40-implementation/40-development-build-test-guide.md) |
-| Ch.7 | [UI, Operator, 테스트와 확장 지점](30-integration/30-ui-operator-tests-and-extension-points.md), [개발/빌드/테스트 가이드](40-implementation/40-development-build-test-guide.md), [운영, 보안, 관측성](50-operations/50-operations-security-observability.md) |
-| Ch.8 | [열린 결정 기록](90-decisions/90-open-decision-register.md), [운영, 보안, 관측성](50-operations/50-operations-security-observability.md) |
+| Ch.6 | [서버 런타임과 요청 생명주기](10-architecture/10-server-runtime-and-request-lifecycle.md), [개발, 빌드, 테스트 실행 계약](40-implementation/40-development-build-test-guide.md) |
+| Ch.7 | [UI, Operator, 테스트와 확장 지점](30-integration/30-ui-operator-tests-and-extension-points.md), [개발, 빌드, 테스트 실행 계약](40-implementation/40-development-build-test-guide.md), [운영, 보안, 관측성 계약](50-operations/50-operations-security-observability.md) |
+| Ch.8 | [열린 결정 기록](90-decisions/90-open-decision-register.md), [운영, 보안, 관측성 계약](50-operations/50-operations-security-observability.md) |
 
 ---
 
@@ -141,7 +141,17 @@ Keycloak의 핵심은 모든 애플리케이션을 무지하게 만드는 것이
 
 ---
 
-| 방향 | 문서 |
+## 관련 문서
+
+| 목적 | 문서 |
 | --- | --- |
-| **다음 챕터** | [Ch.1 설계 철학과 첫 번째 원칙](./whitepaper/ch01-design-philosophy.md) |
-| **문서 색인** | [README.md](README.md) |
+| 전체 문서 색인 | [Keycloak custom 문서 색인](README.md) |
+| 기준 아키텍처 | [프로젝트 개요와 기준 아키텍처](00-foundation/01-project-overview-and-reference-architecture.md) |
+| 서버 런타임 | [서버 런타임과 요청 생명주기](10-architecture/10-server-runtime-and-request-lifecycle.md) |
+| 운영 기준 | [운영, 보안, 관측성 계약](50-operations/50-operations-security-observability.md) |
+
+## 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [문서 색인](README.md) | [Ch.1 설계 철학과 첫 번째 원칙](./whitepaper/ch01-design-philosophy.md) | [문서 색인](README.md) |

@@ -123,8 +123,17 @@ Keycloak이 발급한 token에는 issuer가 들어갑니다. Resource server는 
 
 ---
 
-| 방향 | 문서 |
+## 관련 문서
+
+| 목적 | 문서 |
 | --- | --- |
-| **이전 챕터** | [Ch.1 설계 철학과 첫 번째 원칙](./ch01-design-philosophy.md) |
-| **다음 챕터** | [Ch.3 Realm, Client, Role 정책 모델](./ch03-identity-policy-model.md) |
-| **백서 홈** | [WHITEPAPER.md](../WHITEPAPER.md) |
+| 기준 아키텍처 | [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md) |
+| 운영 신뢰 경계 | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) |
+| 설계 철학 | [Ch.1 설계 철학과 첫 번째 원칙](./ch01-design-philosophy.md) |
+| 정책 모델 | [Ch.3 Realm, Client, Role 정책 모델](./ch03-identity-policy-model.md) |
+
+## 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [Ch.1 설계 철학과 첫 번째 원칙](./ch01-design-philosophy.md) | [Ch.3 Realm, Client, Role 정책 모델](./ch03-identity-policy-model.md) | [백서 홈](../WHITEPAPER.md) |

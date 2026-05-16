@@ -270,3 +270,21 @@ Event lifecycle은 user event와 admin event를 분리하지만, 둘 다 listene
 ## 10. 작업 범위 기록
 
 이 문서는 분석과 문서화만 수행합니다. 서버 runtime Java code, tests, Maven 설정은 수정하지 않습니다.
+
+---
+
+## 11. 관련 문서
+
+| 목적 | 문서 |
+| --- | --- |
+| 백서 흐름 | [백서 Ch.4 인증, Token, Session 생명주기](../whitepaper/ch04-authentication-session-token-lifecycle.md) |
+| SPI와 Quarkus 확장 | [백서 Ch.6 SPI, Provider, Quarkus 런타임](../whitepaper/ch06-extension-runtime-model.md) |
+| 기준 아키텍처 | [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md) |
+| 정책 모델 | [Realm, Client, User 정책 모델](../20-policy/20-realm-client-user-policy-model.md) |
+| 개발 검증 | [개발, 빌드, 테스트 실행 계약](../40-implementation/40-development-build-test-guide.md) |
+
+## 12. 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [프로젝트 개요와 기준 아키텍처](../00-foundation/01-project-overview-and-reference-architecture.md) | [Realm, Client, User 정책 모델](../20-policy/20-realm-client-user-policy-model.md) | [문서 색인](../README.md) |

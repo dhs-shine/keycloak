@@ -130,8 +130,17 @@ Realm을 많이 만들면 격리는 강해집니다. 동시에 key rotation, cli
 
 ---
 
-| 방향 | 문서 |
+## 관련 문서
+
+| 목적 | 문서 |
 | --- | --- |
-| **이전 챕터** | [Ch.2 시스템 토폴로지와 신뢰 경계](./ch02-system-topology.md) |
-| **다음 챕터** | [Ch.4 인증, Token, Session 생명주기](./ch04-authentication-session-token-lifecycle.md) |
-| **백서 홈** | [WHITEPAPER.md](../WHITEPAPER.md) |
+| 정책 모델 상세 | [Realm, Client, User 정책 모델](../20-policy/20-realm-client-user-policy-model.md) |
+| 요청 처리 경로 | [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) |
+| 이전 신뢰 경계 | [Ch.2 시스템 토폴로지와 신뢰 경계](./ch02-system-topology.md) |
+| 다음 실행 흐름 | [Ch.4 인증, Token, Session 생명주기](./ch04-authentication-session-token-lifecycle.md) |
+
+## 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [Ch.2 시스템 토폴로지와 신뢰 경계](./ch02-system-topology.md) | [Ch.4 인증, Token, Session 생명주기](./ch04-authentication-session-token-lifecycle.md) | [백서 홈](../WHITEPAPER.md) |

@@ -130,7 +130,17 @@ Keycloak을 성공적으로 도입한다는 것은 Admin Console에서 realm과 
 
 ---
 
-| 방향 | 문서 |
+## 관련 문서
+
+| 목적 | 문서 |
 | --- | --- |
-| **이전 챕터** | [Ch.7 Release, Operator, 운영 안정성](./ch07-release-and-operations.md) |
-| **백서 홈** | [WHITEPAPER.md](../WHITEPAPER.md) |
+| 운영 hardening | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) |
+| 열린 결정 추적 | [열린 결정 기록](../90-decisions/90-open-decision-register.md) |
+| release 운영 모델 | [Ch.7 Release, Operator, 운영 안정성](./ch07-release-and-operations.md) |
+| 전체 문서 색인 | [Keycloak custom 문서 색인](../README.md) |
+
+## 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [Ch.7 Release, Operator, 운영 안정성](./ch07-release-and-operations.md) | [문서 색인](../README.md) | [백서 홈](../WHITEPAPER.md) |

@@ -288,3 +288,21 @@ flowchart TD
 ## 13. 작업 범위 기록
 
 이 문서는 분석과 문서화만 수행합니다. Realm 설정, client 설정, protocol mapper, authentication flow, Java provider code는 수정하지 않습니다.
+
+---
+
+## 14. 관련 문서
+
+| 목적 | 문서 |
+| --- | --- |
+| 정책 모델 백서 | [백서 Ch.3 Realm, Client, Role 정책 모델](../whitepaper/ch03-identity-policy-model.md) |
+| 인증과 session 흐름 | [백서 Ch.4 인증, Token, Session 생명주기](../whitepaper/ch04-authentication-session-token-lifecycle.md) |
+| Federation/Brokering | [백서 Ch.5 Federation과 Identity Brokering](../whitepaper/ch05-federation-and-brokering.md) |
+| 요청 처리 경로 | [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) |
+| 운영 hardening | [운영, 보안, 관측성 계약](../50-operations/50-operations-security-observability.md) |
+
+## 15. 문서 이동
+
+| 이전 | 다음 | 상위 |
+| --- | --- | --- |
+| [서버 런타임과 요청 생명주기](../10-architecture/10-server-runtime-and-request-lifecycle.md) | [UI, Operator, 테스트와 확장 지점](../30-integration/30-ui-operator-tests-and-extension-points.md) | [문서 색인](../README.md) |
