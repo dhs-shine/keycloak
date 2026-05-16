@@ -4,16 +4,24 @@
 
 최신 소스 재검증: 2026-05-16, `/Users/dhsshin/Documents/LLMOps/keycloak` 현재 작업트리 기준
 
-참고 문서 구조: `/Users/dhsshin/Documents/LLMOps/litellm-custom/docs/custom`
+참고 문서 구조: `/Users/dhsshin/Documents/LLMOps/litellm-custom/docs/custom`, `/Users/dhsshin/Documents/LLMOps/langfuse/docs/WHITEPAPER.md`, `/Users/dhsshin/Documents/LLMOps/langfuse/docs/whitepaper/`
 
 ## 문서 세트의 목적
 
 이 문서 세트는 Keycloak 저장소를 처음 접하는 사람도 전체 구조, 런타임 흐름, 빌드/테스트, 운영 책임, 확장 지점을 빠짐없이 이해할 수 있도록 정리한 분석 문서다.
 
+이제 문서 세트는 두 계층으로 구성된다.
+
+| 계층 | 문서 | 역할 |
+| --- | --- | --- |
+| 백서 서사 | [Keycloak 시스템 백서](WHITEPAPER.md) | 설계 철학, why, tradeoff, 대안 분석, 실패 모드, 운영 결정의 상위 narrative |
+| 참조 문서 | `00-foundation` ~ `90-decisions` | repository 구조, code path, build/test, 운영 체크리스트를 빠르게 찾는 reference |
+
 이 문서가 답하는 질문:
 
 | 질문 | 답을 찾을 위치 |
 | --- | --- |
+| Keycloak을 왜 Identity Control Plane으로 봐야 하는가 | [Keycloak 시스템 백서](WHITEPAPER.md) |
 | Keycloak은 어떤 제품이고 이 저장소는 무엇을 포함하는가 | [01 프로젝트 개요와 기준 아키텍처](00-foundation/01-project-overview-and-reference-architecture.md) |
 | Maven 모듈과 Quarkus 배포물은 어떻게 구성되는가 | [01](00-foundation/01-project-overview-and-reference-architecture.md), [40 개발/빌드/테스트 가이드](40-implementation/40-development-build-test-guide.md) |
 | 서버가 어떻게 시작되고 요청을 처리하는가 | [10 서버 런타임과 요청 생명주기](10-architecture/10-server-runtime-and-request-lifecycle.md) |
@@ -45,7 +53,19 @@
 
 ```text
 docs/custom/
+  WHITEPAPER.md
   README.md
+  whitepaper/
+    ch01-identity-control-plane.md
+    ch02-topology-and-trust-boundaries.md
+    ch03-quarkus-build-runtime-boundary.md
+    ch04-spi-provider-session-contract.md
+    ch05-realm-client-user-modeling.md
+    ch06-oidc-token-lifecycle.md
+    ch07-session-cache-storage.md
+    ch08-federation-and-brokering.md
+    ch09-operator-test-delivery.md
+    ch10-operations-security-failure-modes.md
   00-foundation/
     01-project-overview-and-reference-architecture.md
   10-architecture/
@@ -64,6 +84,7 @@ docs/custom/
 
 | 디렉토리 | 책임 |
 | --- | --- |
+| `whitepaper` | Identity Control Plane 관점의 장별 백서, 설계 질문, tradeoff, 실패 모드, source evidence |
 | `00-foundation` | 제품 목적, repository 범위, 기준 아키텍처, module map, trust boundary |
 | `10-architecture` | Quarkus bootstrap, SPI/session, OIDC/Admin API, storage, event, cache lifecycle |
 | `20-policy` | realm/client/user/role/group/scope/token/authentication flow 정책 모델 |
@@ -76,13 +97,13 @@ docs/custom/
 
 | 독자 | 읽는 순서 | 목적 |
 | --- | --- | --- |
-| 처음 온 개발자 | README → [01](00-foundation/01-project-overview-and-reference-architecture.md) → [40](40-implementation/40-development-build-test-guide.md) → [10](10-architecture/10-server-runtime-and-request-lifecycle.md) | 저장소 구조, 빌드 방법, 런타임 흐름 파악 |
-| 서버 런타임 분석자 | README → [10](10-architecture/10-server-runtime-and-request-lifecycle.md) → [20](20-policy/20-realm-client-user-policy-model.md) → [01](00-foundation/01-project-overview-and-reference-architecture.md) | request lifecycle과 domain model 연결 |
-| IAM 설계자 | README → [20](20-policy/20-realm-client-user-policy-model.md) → [10](10-architecture/10-server-runtime-and-request-lifecycle.md) → [50](50-operations/50-operations-security-observability.md) | realm/client/token/session/federation 정책 이해 |
+| 처음 온 개발자 | README → [WHITEPAPER](WHITEPAPER.md) → [01](00-foundation/01-project-overview-and-reference-architecture.md) → [40](40-implementation/40-development-build-test-guide.md) → [10](10-architecture/10-server-runtime-and-request-lifecycle.md) | 설계 서사, 저장소 구조, 빌드 방법, 런타임 흐름 파악 |
+| 서버 런타임 분석자 | README → [WHITEPAPER Ch.3~7](WHITEPAPER.md) → [10](10-architecture/10-server-runtime-and-request-lifecycle.md) → [20](20-policy/20-realm-client-user-policy-model.md) | request lifecycle과 domain model 연결 |
+| IAM 설계자 | README → [WHITEPAPER Ch.1~6](WHITEPAPER.md) → [20](20-policy/20-realm-client-user-policy-model.md) → [50](50-operations/50-operations-security-observability.md) | identity control plane, realm/client/token/session/federation 정책 이해 |
 | UI 개발자 | README → [30](30-integration/30-ui-operator-tests-and-extension-points.md) → [40](40-implementation/40-development-build-test-guide.md) | Admin UI, Account UI, theme packaging, local UI server 파악 |
-| Operator 개발자 | README → [30](30-integration/30-ui-operator-tests-and-extension-points.md) → [50](50-operations/50-operations-security-observability.md) → [40](40-implementation/40-development-build-test-guide.md) | CRD/controller/dependent resource와 운영 관점 확인 |
-| 운영 담당자 | README → [50](50-operations/50-operations-security-observability.md) → [01](00-foundation/01-project-overview-and-reference-architecture.md) → [40](40-implementation/40-development-build-test-guide.md) | 배포, DB/cache, 보안, observability, 장애 모드 확인 |
-| 테스트 담당자 | README → [40](40-implementation/40-development-build-test-guide.md) → [30](30-integration/30-ui-operator-tests-and-extension-points.md) | test-framework, testsuite, UI/Operator 테스트 경계 파악 |
+| Operator 개발자 | README → [WHITEPAPER Ch.9](WHITEPAPER.md) → [30](30-integration/30-ui-operator-tests-and-extension-points.md) → [50](50-operations/50-operations-security-observability.md) | CRD/controller/dependent resource와 운영 관점 확인 |
+| 운영 담당자 | README → [WHITEPAPER Ch.7~10](WHITEPAPER.md) → [50](50-operations/50-operations-security-observability.md) → [40](40-implementation/40-development-build-test-guide.md) | 배포, DB/cache, 보안, observability, 장애 모드 확인 |
+| 테스트 담당자 | README → [WHITEPAPER Ch.9](WHITEPAPER.md) → [40](40-implementation/40-development-build-test-guide.md) → [30](30-integration/30-ui-operator-tests-and-extension-points.md) | test-framework, testsuite, UI/Operator 테스트 경계 파악 |
 
 ## 한 장으로 보는 전체 구조
 
@@ -136,7 +157,8 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-  R["README<br/>문서 색인"] --> F["01 프로젝트 개요<br/>아키텍처와 모듈"]
+  R["README<br/>문서 색인"] --> W["WHITEPAPER<br/>상위 서사와 tradeoff"]
+  W --> F["01 프로젝트 개요<br/>아키텍처와 모듈"]
   F --> A["10 서버 런타임<br/>요청 생명주기"]
   A --> P["20 정책 모델<br/>realm/client/user/token"]
   P --> I["30 통합 영역<br/>UI/Operator/Test"]
@@ -152,6 +174,8 @@ flowchart LR
 
 | 계층 | 문서 | 역할 |
 | --- | --- | --- |
+| 백서 | [Keycloak 시스템 백서](WHITEPAPER.md) | Identity Control Plane 관점의 설계 철학, 신뢰 경계, tradeoff, 실패 모드 |
+| 백서 장별 상세 | [whitepaper/](whitepaper/ch01-identity-control-plane.md) | Ch.1~10 상세 장. session/cache, federation, Operator, 운영 실패 모드까지 확장 |
 | 색인 | [README](README.md) | 문서 세트 목적, 빠른 읽기 경로, 전체 구조 |
 | Foundation | [01 프로젝트 개요와 기준 아키텍처](00-foundation/01-project-overview-and-reference-architecture.md) | 제품 목적, repository 범위, Maven/Quarkus module map, trust boundary |
 | Architecture | [10 서버 런타임과 요청 생명주기](10-architecture/10-server-runtime-and-request-lifecycle.md) | bootstrap, `KeycloakSession`, SPI, OIDC/Admin API, storage/event/cache 흐름 |
@@ -212,8 +236,13 @@ flowchart LR
 | Datastore provider | `model/storage-private/src/main/java/org/keycloak/storage/datastore/DefaultDatastoreProvider.java` |
 | JPA realm/user provider | `model/jpa/src/main/java/org/keycloak/models/jpa/JpaRealmProvider.java`, `model/jpa/src/main/java/org/keycloak/models/jpa/JpaUserProvider.java` |
 | Infinispan sessions/cache | `model/infinispan/src/main/java/org/keycloak/models/sessions/infinispan/`, `model/infinispan/src/main/java/org/keycloak/models/cache/infinispan/` |
+| Persistent sessions | `model/jpa/src/main/java/org/keycloak/models/jpa/session/`, `model/storage-private/src/main/java/org/keycloak/models/session/` |
+| User federation SPI | `model/storage/src/main/java/org/keycloak/storage/UserStorageProvider.java`, `model/storage-private/src/main/java/org/keycloak/storage/UserStorageManager.java` |
+| LDAP federation | `federation/ldap/src/main/java/org/keycloak/storage/ldap/LDAPStorageProvider.java`, `federation/ldap/src/main/java/org/keycloak/storage/ldap/mappers/` |
+| Identity brokering | `services/src/main/java/org/keycloak/services/resources/IdentityBrokerService.java`, `services/src/main/java/org/keycloak/broker/` |
 | JS workspace | `js/package.json`, `js/pnpm-workspace.yaml`, `js/pom.xml` |
 | Operator controller | `operator/src/main/java/org/keycloak/operator/controllers/KeycloakController.java` |
+| Operator CR/spec | `operator/src/main/java/org/keycloak/operator/crds/v2beta1/deployment/Keycloak.java`, `operator/src/main/java/org/keycloak/operator/crds/v2beta1/deployment/KeycloakSpec.java` |
 | Test framework entry | `test-framework/core/src/main/java/org/keycloak/testframework/KeycloakIntegrationTestExtension.java` |
 
 ## 주요 빌드와 실행 명령
@@ -237,11 +266,23 @@ flowchart LR
 | --- | --- |
 | 한국어 우선 | 제목, 섹션명, 표 헤더, 설명 문장은 한국어를 기본으로 한다. |
 | 기술 식별자 보존 | class, method, config key, command, 파일 경로, protocol 명칭은 원문을 유지한다. |
+| 백서 우선 서사 | 중요한 문서는 기능 설명보다 설계 질문, 선택 이유, 대안, 대가, 실패 모드를 먼저 설명한다. |
 | 표 우선 | 책임, 결정, 파일 map, 테스트 matrix, 운영 기준은 표로 정리한다. |
 | Mermaid 사용 | lifecycle, architecture, data flow는 Mermaid로 표현하고 반드시 텍스트 설명을 함께 둔다. |
 | 결정과 분석 분리 | 핵심 판단은 foundation/policy/operations에 두고, code path 상세는 architecture/implementation에 둔다. |
 | 범위 명시 | 문서마다 다루는 범위와 제외 범위를 명확히 한다. |
 | source 기준 기록 | 분석 기준 날짜와 확인한 repository 경로를 남긴다. |
+
+백서형 문서의 표준 구조:
+
+| 순서 | 섹션 | 목적 |
+| --- | --- | --- |
+| 1 | 설계 질문 | 이 컴포넌트가 해결해야 하는 본질적 문제를 먼저 제시한다. |
+| 2 | Keycloak의 답 | 실제 구현이 선택한 구조를 설명한다. |
+| 3 | 왜 이 방식인가 | 대안과 tradeoff를 비교한다. |
+| 4 | 소스코드 증거 | 실제 파일, class, endpoint, provider를 연결한다. |
+| 5 | 운영자가 결정할 것 | production 적용 시 선택해야 할 값과 영향도를 정리한다. |
+| 6 | 핵심 인사이트 | 해당 장의 결론을 3개 내외로 압축한다. |
 
 ## 조사 대상 repository
 
