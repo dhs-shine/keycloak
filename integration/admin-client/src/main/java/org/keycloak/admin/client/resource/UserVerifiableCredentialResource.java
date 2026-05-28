@@ -10,8 +10,11 @@ import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 
+import org.keycloak.representations.idm.oid4vc.CredentialOfferActionConfig;
+import org.keycloak.representations.idm.oid4vc.IssuedVerifiableCredentialRepresentation;
 import org.keycloak.representations.idm.oid4vc.UserVerifiableCredentialRepresentation;
 
 /**
@@ -40,5 +43,20 @@ public interface UserVerifiableCredentialResource {
     @Produces(MediaType.APPLICATION_JSON)
     UserVerifiableCredentialRepresentation updateCredential(@PathParam("credentialScopeName") String credentialScopeName);
 
-    // TODO: Issued credentials
+    @GET
+    @Path("issued-credentials")
+    @Produces(MediaType.APPLICATION_JSON)
+    List<IssuedVerifiableCredentialRepresentation> getIssuedCredentials();
+
+    @DELETE
+    @Path("issued-credentials/{id}")
+    void revokeIssuedCredential(@PathParam("id") String credentialId);
+
+    @PUT
+    @Path("credentials/send-credential-offer")
+    @Consumes(MediaType.APPLICATION_JSON)
+    void sendCredentialOffer(@QueryParam("client_id") String clientId,
+                             @QueryParam("redirect_uri") String redirectUri,
+                             @QueryParam("lifespan") Integer lifespan,
+                             CredentialOfferActionConfig credentialOfferConfig);
 }
