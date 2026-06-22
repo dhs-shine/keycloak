@@ -223,7 +223,7 @@ The following table describes the available OID4VCI realm attributes:
 | Default
 | Description
 
-| Nonce Lifetime
+| OID4VCI Nonce Lifetime
 | `vc.c-nonce-lifetime-seconds`
 | `60` seconds
 | Lifetime of the `c_nonce` value returned by the nonce endpoint. Wallets must include this nonce when presenting proofs at the credential endpoint. Minimum: 30 seconds.
@@ -311,6 +311,15 @@ For step-by-step instructions on creating a user, refer to the {project_name} do
 
 Ensure that the user has a valid username, email, and password. If the password should not be reset upon first login, disable the "Temporary" toggle during password configuration.
 
+The next step is to create verifiable credential for the user to indicate which verifiable credentials the particular user can request. You may switch to the tab **Verifiable credentials**
+of the user, request creating verifiable credential and create some verifiable credential for the user, which you want this user to be able to obtain. For now, you can
+choose some of the pre-defined OID4VCI credential scopes or some credential scope you created based on <<_oid4vci_client_scope, the instructions from the credential scope section>>.
+
+Once verifiable credential is created, administrator can send credential offer to the user by email by click **Send credential offer** in the table of available verifiable credentials.
+This link is available in case user has email. It is also needed that SMTP is properly configured for the realm as described in the <<_email,dedicated section>>. The email will also
+inform user that he has some verifiable credential available. User can also visit <<_account-service,Account console>> and request issuance of some available verifiable credential by himself.
+
+[[_oid4vci_client_scope]]
 === Create Client Scopes with Mappers
 
 Client scopes define **which user attributes** are included in Verifiable Credentials (VCs) and therefore represent the Verifiable Credential configuration itself. Each credential type is configured as a dedicated client scope using the **OpenID for Verifiable Credentials** protocol.
@@ -324,7 +333,7 @@ Many OID4VCI client scope attributes can be configured directly through the {pro
 . Navigate to *Client Scopes* and click *Create client scope*.
 . Configure the basic settings:
    * **Name** – A unique identifier for this credential type (e.g., `membership-credential`).
-   * **Type** – Select *Optional* (recommended for credential scopes).
+   * **Type** – Select *None* (recommended for credential scopes).
    * **Protocol** – Select **OpenID for Verifiable Credentials**.
 . Ensure **Include in token scope** is toggled **On** — this is required for the scope to appear in the access token's `scope` claim.
 . Ensure **Include in OpenID Provider Metadata** is toggled **On** — when enabled, this client scope is included in the OpenID Provider Metadata and the credential configuration will be advertised in the Issuer Metadata Endpoint response.
@@ -482,17 +491,47 @@ At a minimum, a credential should include the user's core identity attributes. F
 The `vc.display` property provides display metadata that wallets use to show human-readable descriptions for each claim. For time-based mappers like `iat`, display configuration is typically not required.
 ====
 
-=== Create the Client
+=== Create and Configure the Client
 
 Set up a client to handle Verifiable Credential (VC) requests and assign the necessary scopes.
 The client does not differ from regular OpenID Connect clients — with one exception: it must have the appropriate **optional ClientScopes** assigned that define the Verifiable Credentials it is allowed to issue.
 
-. Create a JSON file (e.g., `oid4vc-rest-api-client.json`) with the following content:
+After creating the client, you must configure its OID4VCI-specific settings.
+
+==== Enabling OID4VCI for the Client
+
+To allow a client to issue Verifiable Credentials, you must enable OID4VCI for that specific client:
+
+. In the {project_name} Admin Console, navigate to *Clients* and select your client.
+. Go to the *Advanced* tab.
+. Scroll down to the **OpenID for Verifiable Credentials** section.
+. Toggle **OID4VCI enabled** to **On**.
+. Click *Save*.
+
+image::images/oid4vci/enable-oid4vci-for-client.png[Enabling OID4VCI for the client, width=650]
+
+==== Assigning Credential Scopes
+
+For a client to issue a specific type of credential, the corresponding OID4VCI client scope (which defines the credential format and claims) must be assigned to it:
+
+. In the {project_name} Admin Console, navigate to *Clients* and select your client.
+. Go to the *Client scopes* tab.
+. Click *Add client scope*.
+. Select the credential scope you created earlier (e.g., `membership-credential`).
+. Choose **Optional** as the assignment type (recommended for credential scopes).
+
+This ensures that the client can request and process the scope during the authorization flow, allowing the wallet to receive the corresponding Verifiable Credential.
+
+==== Creating a Client via the REST API
+
+Alternatively, you can create and configure the client programmatically. Ensure the `oid4vci.enabled` attribute is set to `true` and the required client scope is added to `optionalClientScopes`.
+
+. Create a JSON file (e.g., `my-wallet-client.json`) with the following content:
 +
 [source,json]
 ----
 {
-  "clientId": "oid4vc-rest-api",
+  "clientId": "my-wallet-client",
   "enabled": true,
   "protocol": "openid-connect",
   "publicClient": false,
@@ -501,8 +540,9 @@ The client does not differ from regular OpenID Connect clients — with one exce
   "redirectUris": ["http://localhost:8080/*"],
   "directAccessGrantsEnabled": true,
   "defaultClientScopes": ["profile"],
-  "optionalClientScopes": ["vc-scope-mapping"],
+  "optionalClientScopes": ["membership-credential"],
   "attributes": {
+    "oid4vci.enabled": "true",
     "client.secret.creation.time": "1719785014",
     "client.introspection.response.allow.jwt.claim.enabled": "false",
     "login_theme": "keycloak",
@@ -512,7 +552,8 @@ The client does not differ from regular OpenID Connect clients — with one exce
 ----
 +
 - **clientId**: Unique identifier for the client.
-- **optionalClientScopes**: Links the `vc-scope-mapping` scope for VC requests.
+- **optionalClientScopes**: Links the credential scope (e.g., `membership-credential`) for VC requests.
+- **attributes.oid4vci.enabled**: Must be `true` to enable OID4VCI functionality for this client.
 
 . Import the client using the following `curl` command:
 +
@@ -521,7 +562,7 @@ The client does not differ from regular OpenID Connect clients — with one exce
 curl -k -X POST "https://localhost:8443/admin/realms/oid4vc-vci/clients" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
-  -d @oid4vc-rest-api-client.json
+  -d @my-wallet-client.json
 ----
 
 === Verifying the Configuration
@@ -547,5 +588,7 @@ This setup leverages {project_name}'s robust **identity management capabilities*
 
 For a **complete reference implementation**, see the sample project:
 https://github.com/adorsys/{project_name}-ssi-deployment/tree/main[{project_name} SSI Deployment^].
+
+include::requesting-credentials.adoc[]
 
 include::proofs.adoc[]
