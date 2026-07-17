@@ -12,7 +12,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import org.keycloak.admin.api.ClientField;
+import org.keycloak.services.client.ClientField;
 
 import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
@@ -303,7 +303,7 @@ public class OASModelFilter implements OASFilter {
                 if (classInfo == null) {
                     log.debugf("No Java class found for schema '%s' — property descriptions from the '%s' annotation will not be added", schemaName, JsonPropertyDescription.class.getName());
                 } else {
-                    // Get class-level validation descriptions (e.g., @UuidUnmodified, @ClientSecretNotBlank)
+                    // Get class-level validation descriptions (e.g., @ServerManagedFieldUnmodified, @ClientSecretNotBlank)
                     Map<String, String> classLevelValidations = validationScanner.buildClassLevelDescriptions(classInfo);
 
                     schema.getProperties().forEach((propertyName, propertySchema) -> {

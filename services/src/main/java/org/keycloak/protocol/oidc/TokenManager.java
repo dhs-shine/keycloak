@@ -463,7 +463,7 @@ public class TokenManager {
         Set<ClientScopeModel> clientScopes;
 
         if (Profile.isFeatureEnabled(Profile.Feature.PARAMETERIZED_SCOPES)) {
-            clientScopes = AuthorizationContextUtil.getClientScopesStreamFromAuthorizationRequestContextWithClient(session, client, scopeParam)
+            clientScopes = AuthorizationContextUtil.getClientScopesStreamFromAuthorizationRequestContextWithClient(session, client, userSession.getUser(), scopeParam)
                     .collect(Collectors.toSet());
         } else {
             clientScopes = getRequestedClientScopes(session, scopeParam, client, userSession.getUser())
@@ -497,7 +497,6 @@ public class TokenManager {
 
         clientSession.detachFromUserSession();
     }
-
 
     public static Set<RoleModel> getAccess(UserModel user, ClientModel client, Stream<ClientScopeModel> clientScopes) {
         Set<RoleModel> roleMappings = RoleUtils.getDeepUserRoleMappings(user);
@@ -811,7 +810,7 @@ public class TokenManager {
 
         if (Profile.isFeatureEnabled(Profile.Feature.PARAMETERIZED_SCOPES)) {
             AuthorizationRequestContext ctx = AuthorizationContextUtil.getAuthorizationRequestContextFromScopesWithClient(
-                    session, client, scopeParam);
+                    session, client, user, scopeParam);
             return ctx.getAuthorizationDetailEntries().stream()
                     .noneMatch(authDetails -> !isGrantedConsent(client, user, grantedConsent, authDetails.getClientScope(),
                     authDetails.getParameterizedScopeParam(), alwaysConsent));
