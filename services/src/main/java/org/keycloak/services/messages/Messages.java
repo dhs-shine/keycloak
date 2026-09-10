@@ -97,7 +97,6 @@ public class Messages {
 
     public static final String EMAIL_EXISTS = "emailExistsMessage";
 
-    public static final String DID_EXISTS = "didExistsMessage";
     public static final String EMAIL_VERIFICATION_PENDING = "emailVerificationPending";
 
     public static final String FEDERATED_IDENTITY_EXISTS = "federatedIdentityExistsMessage";
@@ -231,6 +230,12 @@ public class Messages {
 
     public static final String IDENTITY_PROVIDER_LINK_SUCCESS = "identityProviderLinkSuccess";
 
+    public static final String IDENTITY_PROVIDER_LINK_SUCCESS_HEADER = "identityProviderLinkSuccessHeader";
+
+    public static final String IDENTITY_PROVIDER_LINK_CONFIRMED_ALREADY = "identityProviderLinkConfirmedAlreadyMessage";
+
+    public static final String IDENTITY_PROVIDER_LINK_CONFIRMED_ALREADY_HEADER = "identityProviderLinkConfirmedAlreadyMessageHeader";
+
     public static final String CONFIRM_ACCOUNT_LINKING = "confirmAccountLinking";
 
     public static final String CONFIRM_ACCOUNT_LINKING_BODY = "confirmAccountLinkingBody";
@@ -345,6 +350,12 @@ public class Messages {
     public static final String WEBAUTHN_ERROR_API_SECURITY = "webauthn-error-api-security";
     public static final String WEBAUTHN_ERROR_UNSUPPORTED_BROWSER = "webauthn-unsupported-browser-text";
     public static final String WEBAUTHN_ERROR_DUPLICATED_DEVICE = "webauthn-error-duplicated-device";
+    public static final String WEBAUTHN_ERROR_USER_NOT_PRESENT = "webauthn-error-user-not-present";
+    public static final String WEBAUTHN_ERROR_USER_NOT_VERIFIED = "webauthn-error-user-not-verified";
+    public static final String WEBAUTHN_ERROR_BAD_ORIGIN = "webauthn-error-bad-origin";
+    public static final String WEBAUTHN_ERROR_BAD_RPID = "webauthn-error-bad-rpid";
+    public static final String WEBAUTHN_ERROR_BAD_CHALLENGE = "webauthn-error-bad-challenge";
+    public static final String WEBAUTHN_ERROR_BAD_SIGNATURE = "webauthn-error-bad-signature";
 
     // Conditions in Conditional Flow
     public static final String ACCESS_DENIED = "access-denied";

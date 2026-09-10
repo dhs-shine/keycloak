@@ -112,11 +112,9 @@ public class GroupTest extends AbstractScimTest {
 
         expected = client.groups().get(expected.getId());
         expected.setDisplayName("Updated " + expected.getDisplayName());
-        expected.setExternalId(KeycloakModelUtils.generateId());
         adminEvents.clear();
         client.groups().patch(expected.getId(), PatchRequest.create()
                 .replace("displayName", expected.getDisplayName())
-                .replace("externalId", expected.getExternalId())
                 .build());
 
         AdminEventAssertion.assertSuccess(adminEvents.poll())
@@ -126,7 +124,133 @@ public class GroupTest extends AbstractScimTest {
 
         Group actual = client.groups().get(expected.getId());
         assertEquals(expected.getDisplayName(), actual.getDisplayName());
-        assertEquals(expected.getExternalId(), actual.getExternalId());
+    }
+
+    @Test
+    public void testPatchImmutableAttribute() {
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group.setExternalId(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+        String originalExternalId = group.getExternalId();
+        adminEvents.clear();
+
+        // PATCH replace on immutable externalId should fail
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .replace("externalId", "new-value")
+                    .build());
+            fail("should fail because externalId is immutable");
+        } catch (ScimClientException sce) {
+            ErrorResponse error = sce.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt());
+            assertEquals("mutability", error.getScimType());
+            assertTrue(error.getDetail().contains("externalId"));
+        }
+
+        // PATCH add on immutable externalId should fail
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .add("externalId", "new-value")
+                    .build());
+            fail("should fail because externalId is immutable");
+        } catch (ScimClientException sce) {
+            ErrorResponse error = sce.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt());
+            assertEquals("mutability", error.getScimType());
+        }
+
+        // PATCH remove on immutable externalId should fail
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .remove("externalId")
+                    .build());
+            fail("should fail because externalId is immutable");
+        } catch (ScimClientException sce) {
+            ErrorResponse error = sce.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt());
+            assertEquals("mutability", error.getScimType());
+        }
+
+        // verify externalId was not changed
+        Group actual = client.groups().get(group.getId());
+        assertEquals(originalExternalId, actual.getExternalId());
+    }
+
+    @Test
+    public void testPatchInitializeImmutableAttribute() {
+        // create a group without externalId
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+        assertNull(group.getExternalId());
+        adminEvents.clear();
+
+        // PATCH add on unset immutable externalId should succeed (RFC 7644 §3.5.2)
+        String externalId = KeycloakModelUtils.generateId();
+        client.groups().patch(group.getId(), PatchRequest.create()
+                .add("externalId", externalId)
+                .build());
+        Group actual = client.groups().get(group.getId());
+        assertEquals(externalId, actual.getExternalId());
+
+        // subsequent PATCH on the now-set externalId should fail
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .add("externalId", "another-value")
+                    .build());
+            fail("should fail because externalId is already set and immutable");
+        } catch (ScimClientException sce) {
+            ErrorResponse error = sce.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt());
+            assertEquals("mutability", error.getScimType());
+        }
+
+        // verify externalId was not changed
+        actual = client.groups().get(group.getId());
+        assertEquals(externalId, actual.getExternalId());
+    }
+
+    @Test
+    public void testPatchReplaceInitializeImmutableAttribute() {
+        // create a group without externalId
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+        assertNull(group.getExternalId());
+        adminEvents.clear();
+
+        // PATCH replace on unset immutable externalId should succeed (RFC 7644 §3.5.2)
+        String externalId = KeycloakModelUtils.generateId();
+        client.groups().patch(group.getId(), PatchRequest.create()
+                .replace("externalId", externalId)
+                .build());
+        Group actual = client.groups().get(group.getId());
+        assertEquals(externalId, actual.getExternalId());
+    }
+
+    @Test
+    public void testPatchImmutableMetaCreated() {
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+        adminEvents.clear();
+
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .replace("meta.created", "2020-01-01T00:00:00Z")
+                    .build());
+            fail("should fail because meta.created is immutable");
+        } catch (ScimClientException sce) {
+            ErrorResponse error = sce.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt());
+            assertEquals("mutability", error.getScimType());
+        }
     }
 
     @Test
@@ -373,6 +497,114 @@ public class GroupTest extends AbstractScimTest {
         assertNotNull(fetched.getMembers());
         assertEquals(1, fetched.getMembers().size());
         assertMember(fetched.getMembers(), userB.getId(), userB.getUserName());
+    }
+
+    @Test
+    public void testGroupMembersFilterByDisplayRejected() {
+        // create users via SCIM
+        User userA = createScimUser();
+
+        // create a group
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+
+        // add member
+        client.groups().patch(group.getId(), PatchRequest.create()
+                .add("members", userA.getId())
+                .build());
+
+        // PATCH remove member with display sub-attribute (not supported - only value is supported)
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .remove("members[display eq \"" + userA.getUserName() + "\"]")
+                    .build());
+            fail("Should have thrown an exception - only 'value' sub-attribute is supported for members filtering");
+        } catch (ScimClientException e) {
+            ErrorResponse error = e.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt(),
+                    "Filtering members by non-value sub-attributes should return 400, got " + error.getStatusInt());
+            assertTrue(error.getDetail().contains("Only value sub-attribute is supported for filtering complex multivalued attributes, got: display"),
+                    "Error should mention only 'value' sub-attribute is supported, got: " + error.getDetail());
+        }
+    }
+
+    @Test
+    public void testGroupMembersFilterByAndOperatorRejected() {
+        // create users via SCIM
+        User userA = createScimUser();
+
+        // create a group
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+
+        // add member
+        client.groups().patch(group.getId(), PatchRequest.create()
+                .add("members", userA.getId())
+                .build());
+
+        // PATCH remove using AND filter - should fail (AND is not supported for multivalued attributes)
+        // AND is not supported because filtering is restricted to 'value' sub-attribute only,
+        // making AND filters like "value eq id1 and value eq id2" semantically invalid
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .remove("members[value eq \"" + userA.getId() + "\" and value eq \"other-id\"]")
+                    .build());
+            fail("Should have thrown an exception - AND operator is not supported for multivalued attributes");
+        } catch (ScimClientException e) {
+            ErrorResponse error = e.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt(),
+                    "AND operator on multivalued attributes should return 400, got " + error.getStatusInt());
+            assertTrue(error.getDetail().contains("and operator is not supported for multivalued or non-complex attributes"),
+                    "Error should mention AND operator not supported, got: " + error.getDetail());
+        }
+    }
+
+    @Test
+    public void testSimpleAttributeFilterWithAndOperatorRejected() {
+        // create a group
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+
+        // PATCH using AND filter on simple single-valued attribute (displayName)
+        // Should fail with 400, not 500 (NPE from visitComparisonExpression returning null)
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .remove("displayName[value eq \"" + group.getDisplayName() + "\" and value eq \"other\"]")
+                    .build());
+            fail("Should have thrown an exception for AND on simple attribute");
+        } catch (ScimClientException e) {
+            ErrorResponse error = e.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt(),
+                    "AND operator on simple single-valued attributes should return 400, not 500 (NPE), got " + error.getStatusInt());
+        }
+    }
+
+    @Test
+    public void testSimpleAttributeFilterWithOrOperatorRejected() {
+        // create a group
+        Group group = new Group();
+        group.setDisplayName(KeycloakModelUtils.generateId());
+        group = client.groups().create(group);
+
+        // PATCH using OR filter on simple single-valued attribute (displayName)
+        // Should fail with 400, not 500 (NPE from flattenIntoArray on a null node)
+        try {
+            client.groups().patch(group.getId(), PatchRequest.create()
+                    .remove("displayName[value eq \"" + group.getDisplayName() + "\" or value eq \"other\"]")
+                    .build());
+            fail("Should have thrown an exception for OR on simple attribute");
+        } catch (ScimClientException e) {
+            ErrorResponse error = e.getError();
+            assertNotNull(error);
+            assertEquals(400, error.getStatusInt(),
+                    "OR operator on simple single-valued attributes should return 400, not 500 (NPE), got " + error.getStatusInt());
+        }
     }
 
     @Test

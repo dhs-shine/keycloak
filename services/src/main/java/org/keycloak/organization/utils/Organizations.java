@@ -51,6 +51,7 @@ import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.organization.OrganizationProvider;
 import org.keycloak.organization.protocol.mappers.oidc.OrganizationScope;
+import org.keycloak.representations.idm.IdentityProviderRepresentation;
 import org.keycloak.services.ErrorResponse;
 import org.keycloak.services.Urls;
 import org.keycloak.services.resources.admin.fgap.AdminPermissionEvaluator;
@@ -126,6 +127,13 @@ public class Organizations {
         }
 
         return brokers;
+    }
+
+    public static void stripOrganizationId(IdentityProviderRepresentation representation) {
+        representation.setOrganizationLinks(null);
+        if (representation.getConfig() != null) {
+            representation.getConfig().remove(OrganizationModel.ORGANIZATION_ATTRIBUTE);
+        }
     }
 
     public static Consumer<GroupModel> removeGroup(KeycloakSession session, RealmModel realm) {
@@ -207,7 +215,7 @@ public class Organizations {
     }
 
     public static void validateDomain(String rawDomain) {
-        if (rawDomain == null) {
+        if (isBlank(rawDomain)) {
             return;
         }
 
@@ -434,6 +442,7 @@ public class Organizations {
 
     public static OrganizationModel resolveByDomain(List<OrganizationModel> organizations, String domain) {
         int bestParts = -1;
+        boolean bestIsExact = false;
         OrganizationModel organization = null;
 
         for (OrganizationModel model : organizations) {
@@ -449,9 +458,12 @@ public class Organizations {
             }
 
             int mostSpecificParts = getDomainPartsSize(bestMatch.getName());
+            boolean isExact = !bestMatch.getName().startsWith(WILDCARD_PREFIX);
 
-            if (mostSpecificParts > bestParts) {
+            if (mostSpecificParts > bestParts
+                    || (mostSpecificParts == bestParts && isExact && !bestIsExact)) {
                 bestParts = mostSpecificParts;
+                bestIsExact = isExact;
                 organization = model;
             }
         }

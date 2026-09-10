@@ -26,6 +26,7 @@ import java.util.UUID;
 import java.util.stream.Stream;
 
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriBuilder;
 
 import org.keycloak.OAuth2Constants;
 import org.keycloak.broker.provider.AbstractIdentityProvider;
@@ -33,7 +34,9 @@ import org.keycloak.broker.provider.AuthenticationRequest;
 import org.keycloak.broker.provider.IdentityBrokerException;
 import org.keycloak.broker.provider.TrustMaterialIdentityProvider;
 import org.keycloak.broker.provider.TrustMaterialRequest;
+import org.keycloak.broker.provider.TrustMaterialResolver;
 import org.keycloak.broker.provider.TrustMaterialSdJwtIssuerResolver;
+import org.keycloak.broker.provider.X509TrustMaterial;
 import org.keycloak.broker.trust.TrustKeyUtil;
 import org.keycloak.common.util.Base64Url;
 import org.keycloak.common.util.SecretGenerator;
@@ -52,6 +55,7 @@ import org.keycloak.models.UserSessionModel;
 import org.keycloak.sdjwt.vp.TrustedSdJwtIssuerResolver;
 import org.keycloak.sessions.AuthenticationSessionModel;
 import org.keycloak.util.JsonSerialization;
+import org.keycloak.utils.QRCodeUtils;
 import org.keycloak.utils.StringUtil;
 
 import org.jboss.logging.Logger;
@@ -59,10 +63,12 @@ import org.jboss.logging.Logger;
 /**
  * Identity provider that authenticates users with an OpenID4VP (OID4VP) wallet presentation.
  *
- * <p>Supports the same device flow with a single SD-JWT VC. {@link #performLogin} renders a page with
- * an {@code openid4vp://} link, the wallet fetches a signed request object and posts the presentation
+ * <p>Supports the same device and cross device flows with a single SD-JWT VC. {@link #performLogin}
+ * renders a page with an {@code openid4vp://} link for a wallet on this device and a QR code for a
+ * wallet on another device. The wallet fetches a signed request object and posts the presentation
  * back to {@link OID4VPIdentityProviderEndpoint}, which verifies it and drives the normal broker
- * machinery (existing or new user, first and post broker login).
+ * machinery (existing or new user, first and post broker login). A remote wallet cannot redirect
+ * the browser, so the login page polls the endpoint until the presentation arrives.
  *
  * <p>The provider also acts as its own {@link TrustMaterialIdentityProvider}: the credential issuer
  * signature is verified against the inline JWKS configured on this provider.
@@ -82,12 +88,20 @@ public class OID4VPIdentityProvider extends AbstractIdentityProvider<OID4VPIdent
     // object and the presentation.
     public static final String CONTEXT_PREFIX = "oid4vp.context.";
     // The deferred object is written once the presentation is verified and read when the browser
-    // returns to complete-auth. It marks that a verified identity, serialized under IDENTITY_NOTE in
-    // the authentication session, is waiting to finish the broker login.
+    // returns to complete-auth. It marks that verified credential claims, stored under
+    // VERIFIED_CLAIMS_NOTE in the authentication session, are waiting to finish the broker login.
     public static final String DEFERRED_PREFIX = "oid4vp.deferred.";
-    public static final String IDENTITY_NOTE = "OID4VP_IDENTITY";
+    public static final String VERIFIED_CLAIMS_NOTE = "OID4VP_VERIFIED_CLAIMS";
+    // Key in BrokeredIdentityContext#getContextData() holding the disclosed claims of the verified
+    // credential presentation, consumed by the OID4VP identity provider mappers.
+    public static final String CREDENTIAL_CLAIMS = "OID4VP_CREDENTIAL_CLAIMS";
     public static final String KEY_ROOT_SESSION_ID = "rootSessionId";
     public static final String KEY_TAB_ID = "tabId";
+    public static final String KEY_STATE = "state";
+    public static final String KEY_RESPONSE_CODE = "responseCode";
+    public static final String KEY_CROSS_DEVICE = "crossDevice";
+
+    public static final int QR_CODE_SIZE = 246;
 
     public OID4VPIdentityProvider(KeycloakSession session, OID4VPIdentityProviderConfig config) {
         super(session, config);
@@ -95,7 +109,6 @@ public class OID4VPIdentityProvider extends AbstractIdentityProvider<OID4VPIdent
 
     @Override
     public Response performLogin(AuthenticationRequest request) {
-        // TODO support the cross device flow (QR code and SSE polling).
         try {
             AuthenticationSessionModel authSession = request.getAuthenticationSession();
             // The OID4VP state correlates the request object, the wallet's direct_post and complete-auth.
@@ -119,16 +132,17 @@ public class OID4VPIdentityProvider extends AbstractIdentityProvider<OID4VPIdent
                     nonce, encryptionKey);
             session.singleUseObjects().put(CONTEXT_PREFIX + state, loginTimeoutSeconds(), context.toMap());
 
-            URI requestUri = OID4VPIdentityProviderEndpoint
-                    .endpointBaseUri(request.getUriInfo().getBaseUriBuilder(), request.getRealm().getName(),
-                            getConfig().getAlias())
-                    .path(OID4VPIdentityProviderEndpoint.REQUEST_OBJECT_PATH).path(state)
-                    .build();
-            String walletUrl = buildWalletUrl(clientId(), requestUri);
+            String clientId = clientId();
+            String sameDeviceWalletUrl = buildWalletUrl(clientId, requestUri(request, state, false));
+            String crossDeviceWalletUrl = buildWalletUrl(clientId, requestUri(request, state, true));
 
             return session.getProvider(LoginFormsProvider.class)
                     .setAuthenticationSession(authSession)
-                    .setAttribute("sameDeviceWalletUrl", walletUrl)
+                    .setAttribute("sameDeviceWalletUrl", sameDeviceWalletUrl)
+                    .setAttribute("crossDeviceWalletUrl", crossDeviceWalletUrl)
+                    .setAttribute("crossDeviceQrCode",
+                            QRCodeUtils.encodeAsQRString(crossDeviceWalletUrl, QR_CODE_SIZE, QR_CODE_SIZE))
+                    .setAttribute("crossDeviceStatusUrl", statusUrl(request, state))
                     .createForm("login-oid4vp.ftl");
         } catch (Exception e) {
             logger.errorf(e, "Failed to initiate OID4VP login: %s", e.getMessage());
@@ -141,9 +155,12 @@ public class OID4VPIdentityProvider extends AbstractIdentityProvider<OID4VPIdent
         return new OID4VPIdentityProviderEndpoint(session, realm, this, callback, event);
     }
 
-    // TODO support delegating to an external trust material identity provider by alias.
     @Override
     public Stream<JWK> resolveKeys(TrustMaterialRequest request) {
+        String trustMaterialIdps = getConfig().getTrustMaterialIdps();
+        if (StringUtil.isNotBlank(trustMaterialIdps)) {
+            return new TrustMaterialResolver().resolveKeys(session, trustMaterialIdps, request);
+        }
         String jwksJson = getConfig().getTrustedIssuerJwks();
         if (StringUtil.isBlank(jwksJson)) {
             return Stream.empty();
@@ -157,8 +174,14 @@ public class OID4VPIdentityProvider extends AbstractIdentityProvider<OID4VPIdent
         }
     }
 
-    // How trusted issuer keys are resolved for a presented credential. The default pins the inline
-    // trusted issuer JWKS through this provider's own trust material.
+    @Override
+    public Stream<X509TrustMaterial> resolveX509Trust(TrustMaterialRequest request) {
+        return new TrustMaterialResolver().resolveX509Trust(session, getConfig().getTrustMaterialIdps(), request);
+    }
+
+    // How trusted issuer material is resolved for a presented credential. The provider acts as its
+    // own trust material, either delegating to the configured trust material identity providers or
+    // serving the inline trusted issuer JWKS.
     // TODO add a trust list backed resolver (e.g. ETSI), selected from configuration.
     protected TrustedSdJwtIssuerResolver trustedIssuerResolver() {
         return new TrustMaterialSdJwtIssuerResolver(this);
@@ -204,6 +227,28 @@ public class OID4VPIdentityProvider extends AbstractIdentityProvider<OID4VPIdent
 
     public String clientId() {
         return clientIdentifier().forCertificate(signingKey().getCertificate());
+    }
+
+    protected URI requestUri(AuthenticationRequest request, String state, boolean crossDevice) {
+        UriBuilder uri = endpointUri(request)
+                .path(OID4VPIdentityProviderEndpoint.REQUEST_OBJECT_PATH).path(state);
+        if (crossDevice) {
+            uri.queryParam(OID4VPIdentityProviderEndpoint.FLOW_PARAM,
+                    OID4VPIdentityProviderEndpoint.FLOW_CROSS_DEVICE);
+        }
+        return uri.build();
+    }
+
+    protected String statusUrl(AuthenticationRequest request, String state) {
+        return endpointUri(request)
+                .path(OID4VPIdentityProviderEndpoint.STATUS_PATH)
+                .queryParam(OAuth2Constants.STATE, state)
+                .build().toString();
+    }
+
+    protected UriBuilder endpointUri(AuthenticationRequest request) {
+        return OID4VPIdentityProviderEndpoint.endpointBaseUri(
+                request.getUriInfo().getBaseUriBuilder(), request.getRealm().getName(), getConfig().getAlias());
     }
 
     protected String buildWalletUrl(String clientId, URI requestUri) {

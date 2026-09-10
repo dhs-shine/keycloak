@@ -101,6 +101,7 @@ public abstract class AbstractRefreshTokenProvider implements RefreshTokenProvid
         ClientSessionContext clientSessionCtx = validation.clientSessionCtx;
         UserSessionModel userSession = validation.userSession;
 
+        event.session(userSession);
         tokenManager.validateSelectedOrganization(session, oldRefreshToken, user);
 
         try {
@@ -250,7 +251,8 @@ public abstract class AbstractRefreshTokenProvider implements RefreshTokenProvid
                     KeycloakModelUtils.runJobInTransaction(factory, s -> s.singleUseObjects().remove(lockId));
                 }
             });
-        }, Duration.of(10, ChronoUnit.SECONDS), 10);
+        // 12s allows 2 retries given the 5s remote-timeout on the actionTokens cache (CacheConfigurator).
+        }, Duration.of(12, ChronoUnit.SECONDS), 10);
     }
 
     /**

@@ -6,10 +6,13 @@ import org.keycloak.testframework.server.KeycloakServerConfig;
 import org.keycloak.testframework.server.KeycloakServerConfigBuilder;
 import org.keycloak.tests.admin.client.SessionTest;
 import org.keycloak.tests.admin.concurrency.ConcurrentLoginTest;
+import org.keycloak.tests.cli.admin.KcAdmSessionTest;
+import org.keycloak.tests.forms.RecoveryAuthnCodesAuthenticatorTest;
 import org.keycloak.tests.loginfailures.LoginFailureExpirationTest;
 import org.keycloak.tests.model.UserSessionProviderOfflineTest;
 import org.keycloak.tests.model.UserSessionProviderTest;
 import org.keycloak.tests.oauth.RefreshTokenTimeoutsTest;
+import org.keycloak.tests.organization.member.OrganizationMemberTest;
 import org.keycloak.tests.session.SessionTimeoutValidationTest;
 import org.keycloak.tests.sessionlimits.UserSessionLimitsTest;
 
@@ -27,7 +30,11 @@ import org.junit.platform.suite.api.Suite;
         UserSessionProviderOfflineTest.class,
         UserSessionLimitsTest.class,
         SessionTimeoutValidationTest.class,
-        LoginFailureExpirationTest.class
+        LoginFailureExpirationTest.class,
+        OrganizationMemberTest.class,
+        KcAdmSessionTest.class,
+        OrganizationMemberTest.class,
+        RecoveryAuthnCodesAuthenticatorTest.class
 })
 public class StatelessTestSuite {
 

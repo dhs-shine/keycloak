@@ -43,6 +43,8 @@ import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.jose.jws.JWSInputException;
 import org.keycloak.models.AccountRoles;
 import org.keycloak.models.Constants;
+import org.keycloak.models.UserSessionProvider;
+import org.keycloak.models.sessions.infinispan.InfinispanUserSessionProviderFactory;
 import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.protocol.oidc.OIDCConfigAttributes;
 import org.keycloak.protocol.oidc.OIDCLoginProtocol;
@@ -489,6 +491,10 @@ public class RefreshTokenTest {
     @Test
     public void refreshingTokenLoadsSessionIntoCache() {
         Assumptions.assumeTrue(isPersistentSessionsFeatureEnabled(adminClient), "Skip as persistent_user_sessions feature is disabled");
+        Assumptions.assumeTrue(runOnServer.fetch(session -> {
+            var factory = (InfinispanUserSessionProviderFactory) session.getKeycloakSessionFactory().getProviderFactory(UserSessionProvider.class);
+            return factory.useCaches();
+        }, Boolean.class), "Skip as session caching is disabled");
 
         oauth.doLogin("test-user@localhost", "password");
 
@@ -1192,6 +1198,64 @@ public class RefreshTokenTest {
             }
 
         } finally {
+            clientRep.setNotBefore(originalClientNotBefore);
+            oauth.clientResource().update(clientRep);
+        }
+    }
+
+    @Test
+    public void refreshTokenClientNotBeforeNotBypassedByOlderRealmNotBefore() {
+        // Obtain a refresh token
+        oauth.doLogin("test-user@localhost", "password");
+
+        EventRepresentation loginEvent = events.poll();
+        EventAssertion.assertSuccess(loginEvent)
+                .userId(user.getId())
+                .clientId("test-app")
+                .hasSessionId()
+                .type(EventType.LOGIN);
+
+        String sessionId = loginEvent.getSessionId();
+        String code = oauth.parseLoginResponse().getCode();
+
+        AccessTokenResponse tokenResponse = oauth.doAccessTokenRequest(code);
+        String refreshToken = tokenResponse.getRefreshToken();
+
+        EventAssertion.assertSuccess(events.poll())
+                .userId(user.getId())
+                .sessionId(sessionId)
+                .clientId("test-app")
+                .type(EventType.CODE_TO_TOKEN);
+
+        int currentTime = (int) (System.currentTimeMillis() / 1000);
+
+        RealmRepresentation realmRep = realm.admin().toRepresentation();
+        int originalRealmNotBefore = realmRep.getNotBefore() != null ? realmRep.getNotBefore() : 0;
+
+        ClientRepresentation clientRep = oauth.clientResource().toRepresentation();
+        int originalClientNotBefore = clientRep.getNotBefore() != null ? clientRep.getNotBefore() : 0;
+
+        try {
+            // Set realm notBefore to the past
+            realmRep.setNotBefore(currentTime - 200);
+            realm.admin().update(realmRep);
+
+            tokenResponse = oauth.doRefreshTokenRequest(refreshToken);
+            assertEquals(200, tokenResponse.getStatusCode(), "Token should be valid when only an older realm notBefore is set");
+
+            //set the client nbf
+            clientRep.setNotBefore(currentTime + 100);
+            oauth.clientResource().update(clientRep);
+
+            // The token was issued before clientNotBefore, must be rejected
+            tokenResponse = oauth.doRefreshTokenRequest(refreshToken);
+            assertEquals(400, tokenResponse.getStatusCode());
+            assertEquals(OAuthErrorException.INVALID_GRANT, tokenResponse.getError());
+
+        } finally {
+            realmRep.setNotBefore(originalRealmNotBefore);
+            realm.admin().update(realmRep);
+
             clientRep.setNotBefore(originalClientNotBefore);
             oauth.clientResource().update(clientRep);
         }

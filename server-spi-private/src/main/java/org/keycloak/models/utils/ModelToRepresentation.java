@@ -113,6 +113,7 @@ import org.keycloak.representations.idm.GroupRepresentation;
 import org.keycloak.representations.idm.IdentityProviderMapperRepresentation;
 import org.keycloak.representations.idm.IdentityProviderRepresentation;
 import org.keycloak.representations.idm.OrganizationDomainRepresentation;
+import org.keycloak.representations.idm.OrganizationIdentityProviderLinkRepresentation;
 import org.keycloak.representations.idm.OrganizationRepresentation;
 import org.keycloak.representations.idm.ProtocolMapperRepresentation;
 import org.keycloak.representations.idm.RealmEventsConfigRepresentation;
@@ -356,14 +357,14 @@ public class ModelToRepresentation {
     public static UserRepresentation toRepresentation(KeycloakSession session, UserModel user, boolean brief) {
         UserProfileProvider provider = session.getProvider(UserProfileProvider.class);
         UserProfile profile = provider.create(UserProfileContext.USER_API, user);
-        UserRepresentation rep = profile.toRepresentation(!brief);
+        UserRepresentation rep = profile.toRepresentation(!brief, false);
         RealmModel realm = session.getContext().getRealm();
 
-        rep = brief ?
-                ModelToRepresentation.toBriefRepresentation(user, rep, false) :
-                ModelToRepresentation.toRepresentation(session, realm, user, rep, false);
-
-        rep.setUserProfileMetadata(null);
+        if (brief) {
+            ModelToRepresentation.toBriefRepresentation(user, rep, false);
+        } else {
+            ModelToRepresentation.toRepresentation(session, realm, user, rep, false);
+        }
 
         return rep;
     }
@@ -1010,7 +1011,12 @@ public class ModelToRepresentation {
         }
 
         if (!export) {
-            providerRep.setOrganizationId(identityProviderModel.getOrganizationId());
+            Set<String> orgIds = identityProviderModel.getOrganizationIds();
+            if (orgIds != null && !orgIds.isEmpty()) {
+                providerRep.setOrganizationLinks(orgIds.stream()
+                        .map(OrganizationIdentityProviderLinkRepresentation::new)
+                        .collect(Collectors.toList()));
+            }
         }
 
         List<IdentityProviderType> identityProviderTypes = IdentityProviderTypeUtil.listTypesFromFactory(session, identityProviderModel.getProviderId());
@@ -1525,6 +1531,8 @@ public class ModelToRepresentation {
         OrganizationDomainRepresentation representation = new OrganizationDomainRepresentation();
         representation.setName(model.getName());
         representation.setVerified(model.isVerified());
+        representation.setIdentityProviderAlias(model.getIdentityProviderAlias());
+        representation.setAutoRedirect(model.isAutoRedirect());
         return representation;
     }
 

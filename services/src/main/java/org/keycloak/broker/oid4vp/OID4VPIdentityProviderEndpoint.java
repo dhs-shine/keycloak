@@ -30,6 +30,7 @@ import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -38,8 +39,6 @@ import jakarta.ws.rs.core.UriBuilder;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.OAuthErrorException;
 import org.keycloak.OID4VCConstants;
-import org.keycloak.authentication.authenticators.broker.util.SerializedBrokeredIdentityContext;
-import org.keycloak.broker.oidc.mappers.AbstractJsonUserAttributeMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.UserAuthenticationIdentityProvider.AuthenticationCallback;
 import org.keycloak.common.VerificationException;
@@ -79,11 +78,12 @@ import org.jboss.logging.Logger;
  * <ul>
  *   <li>{@code GET /request-object/{handle}} serves the signed authorization request object.</li>
  *   <li>{@code POST /} receives the wallet's {@code direct_post} presentation, verifies it, and
- *       returns the browser redirect that finalizes login.</li>
+ *       returns the browser redirect that finalizes login, or an empty JSON object for the cross
+ *       device flow where the remote wallet cannot drive the browser.</li>
+ *   <li>{@code GET /status} tells the polling login page whether the cross device presentation
+ *       arrived.</li>
  *   <li>{@code GET /complete-auth} resolves the deferred identity and hands control back to Keycloak.</li>
  * </ul>
- *
- * <p>TODO add the cross device flow.
  */
 public class OID4VPIdentityProviderEndpoint {
 
@@ -95,6 +95,21 @@ public class OID4VPIdentityProviderEndpoint {
     // Broker-internal endpoint routing, not part of the OID4VP protocol.
     public static final String REQUEST_OBJECT_PATH = "request-object";
     public static final String COMPLETE_AUTH_PATH = "complete-auth";
+    public static final String STATUS_PATH = "status";
+
+    // The cross device signal, carried as a query parameter on the request_uri and echoed on the
+    // response_uri the request object advertises. Flipping it gains a wallet nothing, completion is
+    // bound to the browser session cookie either way.
+    public static final String FLOW_PARAM = "flow";
+    public static final String FLOW_CROSS_DEVICE = "cross_device";
+
+    // Status poll protocol with the login page.
+    public static final String STATUS_KEY = "status";
+    public static final String STATUS_REDIRECT_URI_KEY = "redirectUri";
+    public static final String STATUS_PENDING = "pending";
+    public static final String STATUS_COMPLETE = "complete";
+    public static final String STATUS_EXPIRED = "expired";
+    public static final String STATUS_ERROR = "error";
 
     private final KeycloakSession session;
     private final RealmModel realm;
@@ -117,7 +132,7 @@ public class OID4VPIdentityProviderEndpoint {
 
     @GET
     @Path("/request-object/{state}")
-    public Response requestObject(@PathParam("state") String state) {
+    public Response requestObject(@PathParam("state") String state, @QueryParam(FLOW_PARAM) String flow) {
         Map<String, String> stored = session.singleUseObjects().get(OID4VPIdentityProvider.CONTEXT_PREFIX + state);
         if (stored == null) {
             return loginError(Response.Status.BAD_REQUEST, OAuthErrorException.INVALID_REQUEST,
@@ -125,7 +140,7 @@ public class OID4VPIdentityProviderEndpoint {
         }
         String requestObject;
         try {
-            requestObject = buildRequestObject(state, RequestContext.fromMap(stored))
+            requestObject = buildRequestObject(state, RequestContext.fromMap(stored), isCrossDevice(flow))
                     .sign(provider.signingKey());
         } catch (RuntimeException e) {
             logger.errorf(e, "Failed to build the OID4VP request object: %s", e.getMessage());
@@ -141,7 +156,8 @@ public class OID4VPIdentityProviderEndpoint {
     @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
     public Response directPost(@FormParam(OID4VCConstants.VP_TOKEN) String vpToken,
             @FormParam(OAuth2Constants.STATE) String state,
-            @FormParam(OAuth2Constants.RESPONSE) String response) {
+            @FormParam(OAuth2Constants.RESPONSE) String response,
+            @QueryParam(FLOW_PARAM) String flow) {
         RequestContext requestContext;
         if (StringUtil.isNotBlank(response)) {
             // direct_post.jwt, a JWE whose plaintext carries vp_token and state.
@@ -181,43 +197,106 @@ public class OID4VPIdentityProviderEndpoint {
                     "Authentication session not found", Errors.INVALID_REQUEST);
         }
 
-        BrokeredIdentityContext context;
+        String claimsJson;
         try {
             SdJwtVpVerificationResult result = verifyPresentation(vpToken, requestContext.nonce());
-            context = toBrokeredContext(result, authSession);
+            claimsJson = JsonSerialization.writeValueAsString(result.getClaims());
         } catch (Exception e) {
             logger.warnf("OID4VP presentation rejected: %s", e.getMessage());
             return loginError(Response.Status.BAD_REQUEST, OAuthErrorException.ACCESS_DENIED, e.getMessage(),
                     Errors.IDENTITY_PROVIDER_LOGIN_FAILURE);
         }
 
-        // The wallet cannot finish the browser login, so hand the verified identity to the browser.
-        // Stash it in the authentication session and key the deferred marker by a fresh response_code
-        // rather than reusing the state, which may have leaked through the request_uri. The browser
-        // gets the response_code only from this direct_post response (OID4VP session fixation defense).
-        String responseCode = UUID.randomUUID().toString();
-        SerializedBrokeredIdentityContext.serialize(context)
-                .saveToAuthenticationSession(authSession, OID4VPIdentityProvider.IDENTITY_NOTE);
-        session.singleUseObjects().put(
-                OID4VPIdentityProvider.DEFERRED_PREFIX + responseCode,
-                realm.getAccessCodeLifespanLogin(),
-                Map.of(
-                        OID4VPIdentityProvider.KEY_ROOT_SESSION_ID, requestContext.rootSessionId(),
-                        OID4VPIdentityProvider.KEY_TAB_ID, requestContext.tabId()));
-        session.singleUseObjects().remove(OID4VPIdentityProvider.CONTEXT_PREFIX + state);
+        // Consuming the request context commits this presentation. The single use store guarantees one
+        // winner, so a repeated direct_post or one racing on the other flow fails cleanly.
+        if (session.singleUseObjects().remove(OID4VPIdentityProvider.CONTEXT_PREFIX + state) == null) {
+            return loginError(Response.Status.BAD_REQUEST, OAuthErrorException.INVALID_REQUEST,
+                    "Unknown or expired state", Errors.INVALID_REQUEST);
+        }
 
-        return Response.ok(Map.of(OAuth2Constants.REDIRECT_URI, completeAuthUrl(responseCode)))
-                .type(MediaType.APPLICATION_JSON_TYPE).cacheControl(CacheControlUtil.noCache()).build();
+        // The wallet cannot finish the browser login. Stash the verified claims for complete-auth,
+        // where the browser turns them into the brokered identity, and mark the login as deferred
+        // under a fresh response_code. Deliberately only the claims and not a serialized identity
+        // context: deserializing and later reserializing a context restores stale user property
+        // entries over whatever the identity provider mappers set in between. The state may have
+        // leaked through the request_uri, so only this direct_post response reveals the
+        // response_code (OID4VP session fixation defense).
+        String responseCode = UUID.randomUUID().toString();
+        authSession.setAuthNote(OID4VPIdentityProvider.VERIFIED_CLAIMS_NOTE, claimsJson);
+        session.singleUseObjects().put(
+                OID4VPIdentityProvider.DEFERRED_PREFIX + state,
+                realm.getAccessCodeLifespanLogin(),
+                isCrossDevice(flow)
+                    ? Map.of(OID4VPIdentityProvider.KEY_ROOT_SESSION_ID, requestContext.rootSessionId(),
+                        OID4VPIdentityProvider.KEY_TAB_ID, requestContext.tabId(),
+                        OID4VPIdentityProvider.KEY_RESPONSE_CODE, responseCode,
+                        OID4VPIdentityProvider.KEY_CROSS_DEVICE, Boolean.TRUE.toString())
+                    : Map.of(OID4VPIdentityProvider.KEY_ROOT_SESSION_ID, requestContext.rootSessionId(),
+                        OID4VPIdentityProvider.KEY_TAB_ID, requestContext.tabId(),
+                        OID4VPIdentityProvider.KEY_RESPONSE_CODE, responseCode));
+
+        return isCrossDevice(flow)
+                ? Response.ok(Map.of())
+                        .type(MediaType.APPLICATION_JSON_TYPE).cacheControl(CacheControlUtil.noCache()).build()
+                : Response.ok(Map.of(OAuth2Constants.REDIRECT_URI, completeAuthUrl(state, responseCode)))
+                        .type(MediaType.APPLICATION_JSON_TYPE).cacheControl(CacheControlUtil.noCache()).build();
+    }
+
+    // Tells the polling login page whether the cross device presentation arrived. It only reads, the
+    // deferred identity is consumed by complete-auth alone. The state may have leaked through the QR
+    // code, so nothing is revealed before the browser session cookie matches.
+    @GET
+    @Path("/" + STATUS_PATH)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response status(@QueryParam(OAuth2Constants.STATE) String state) {
+        if (StringUtil.isBlank(state)) {
+            return statusResponse(Response.Status.BAD_REQUEST, STATUS_ERROR, null);
+        }
+        RootAuthenticationSessionModel cookieRootSession =
+                new AuthenticationSessionManager(session).getCurrentRootAuthenticationSession(realm);
+        if (cookieRootSession == null) {
+            return statusResponse(Response.Status.OK, STATUS_ERROR, null);
+        }
+
+        Map<String, String> complete = session.singleUseObjects().get(OID4VPIdentityProvider.DEFERRED_PREFIX + state);
+        if (complete != null) {
+            if (!cookieRootSession.getId().equals(complete.get(OID4VPIdentityProvider.KEY_ROOT_SESSION_ID))
+                    || !Boolean.parseBoolean(complete.get(OID4VPIdentityProvider.KEY_CROSS_DEVICE))) {
+                return statusResponse(Response.Status.OK, STATUS_ERROR, null);
+            }
+
+            return statusResponse(Response.Status.OK, STATUS_COMPLETE,
+                    completeAuthUrl(state, complete.get(OID4VPIdentityProvider.KEY_RESPONSE_CODE)));
+        }
+
+        Map<String, String> stored = session.singleUseObjects().get(OID4VPIdentityProvider.CONTEXT_PREFIX + state);
+        if (stored != null) {
+            if (!cookieRootSession.getId().equals(RequestContext.fromMap(stored).rootSessionId())) {
+                return statusResponse(Response.Status.OK, STATUS_ERROR, null);
+            }
+            return statusResponse(Response.Status.OK, STATUS_PENDING, null);
+        }
+        // Expired, already consumed by complete-auth or finished on the same device. All terminal.
+        return statusResponse(Response.Status.OK, STATUS_EXPIRED, null);
     }
 
     @GET
     @Path("/complete-auth")
-    public Response completeAuth(@QueryParam(OID4VCConstants.RESPONSE_CODE) String responseCode) {
+    public Response completeAuth(@QueryParam(OID4VPIdentityProvider.KEY_STATE) String state,
+            @QueryParam(OID4VCConstants.RESPONSE_CODE) String responseCode) {
+        // Validate the response_code before consuming the entry. The state may have leaked, so a
+        // request without the matching response_code must not be able to void a pending completion.
         Map<String, String> deferred =
-                session.singleUseObjects().remove(OID4VPIdentityProvider.DEFERRED_PREFIX + responseCode);
-        if (deferred == null) {
+                session.singleUseObjects().get(OID4VPIdentityProvider.DEFERRED_PREFIX + state);
+        if (deferred == null || responseCode == null
+                || !responseCode.equals(deferred.get(OID4VPIdentityProvider.KEY_RESPONSE_CODE))) {
             return loginErrorPage(null, Messages.SESSION_NOT_ACTIVE);
         }
+        // The atomic remove picks a single winner among racing requests that carry the correct code.
+        if (session.singleUseObjects().remove(OID4VPIdentityProvider.DEFERRED_PREFIX + state) == null) {
+            return loginErrorPage(null, Messages.SESSION_NOT_ACTIVE);
+        }
+
         AuthenticationSessionModel authSession = resolveAuthSession(
                 deferred.get(OID4VPIdentityProvider.KEY_ROOT_SESSION_ID), deferred.get(OID4VPIdentityProvider.KEY_TAB_ID));
         if (authSession == null) {
@@ -233,23 +312,26 @@ public class OID4VPIdentityProviderEndpoint {
             return loginErrorPage(authSession, Messages.SESSION_NOT_ACTIVE);
         }
 
-        SerializedBrokeredIdentityContext serialized = SerializedBrokeredIdentityContext.readFromAuthenticationSession(
-                authSession, OID4VPIdentityProvider.IDENTITY_NOTE);
-        if (serialized == null) {
+        String claimsJson = authSession.getAuthNote(OID4VPIdentityProvider.VERIFIED_CLAIMS_NOTE);
+        if (claimsJson == null) {
             return loginErrorPage(authSession, Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR);
         }
-        authSession.removeAuthNote(OID4VPIdentityProvider.IDENTITY_NOTE);
+        authSession.removeAuthNote(OID4VPIdentityProvider.VERIFIED_CLAIMS_NOTE);
 
         session.getContext().setAuthenticationSession(authSession);
         session.getContext().setClient(authSession.getClient());
 
-        BrokeredIdentityContext context = serialized.deserialize(session, authSession);
-        context.setAuthenticationSession(authSession);
-
+        BrokeredIdentityContext context;
+        try {
+            context = toBrokeredContext(JsonSerialization.readValue(claimsJson, JsonNode.class), authSession);
+        } catch (IllegalStateException | IOException e) {
+            logger.warnf("OID4VP login not completed: %s", e.getMessage());
+            return loginErrorPage(authSession, Messages.IDENTITY_PROVIDER_UNEXPECTED_ERROR);
+        }
         return callback.authenticated(context);
     }
 
-    protected RequestObject buildRequestObject(String state, RequestContext requestContext) {
+    protected RequestObject buildRequestObject(String state, RequestContext requestContext, boolean crossDevice) {
         String clientId = provider.clientId();
         Instant now = Instant.now();
 
@@ -259,7 +341,7 @@ public class OID4VPIdentityProviderEndpoint {
                 .responseMode(requestContext.isEncrypted()
                         ? OID4VCConstants.RESPONSE_MODE_DIRECT_POST_JWT
                         : OID4VCConstants.RESPONSE_MODE_DIRECT_POST)
-                .responseUri(endpointBaseUrl())
+                .responseUri(responseUri(crossDevice))
                 .nonce(requestContext.nonce())
                 .state(state)
                 .clientMetadata(requestContext.clientMetadata())
@@ -300,7 +382,9 @@ public class OID4VPIdentityProviderEndpoint {
 
         Map<String, String> stored = session.singleUseObjects().get(OID4VPIdentityProvider.CONTEXT_PREFIX + state);
         if (stored == null) {
-            throw new VerificationException("Unknown or expired response encryption key");
+            // The kid is the state, so a consumed or expired login lands here. The message matches the
+            // plain mode so a late second presentation reads the same in both response modes.
+            throw new VerificationException("Unknown or expired state");
         }
         RequestContext requestContext = RequestContext.fromMap(stored);
         if (!requestContext.isEncrypted()) {
@@ -371,7 +455,10 @@ public class OID4VPIdentityProviderEndpoint {
                 .build();
 
         // TODO bind the presentation to the requested credential type and claims, so that not any
-        // credential from a trusted issuer satisfies the login.
+        // credential from a trusted issuer satisfies the login. Planned for the DCQL generation
+        // task: derive PresentationRequirements from the configured identity provider mappers
+        // (required or optional per mapper) and enforce them here. The principal check in
+        // requirePrincipalClaim then becomes just another required claim.
         PresentationRequirements noAdditionalRequirements = disclosedPayload -> {
         };
         TrustedSdJwtIssuer trustedIssuer = provider.trustedIssuerResolver().resolve(sdJwtVP.getIssuerSignedJWT());
@@ -415,8 +502,8 @@ public class OID4VPIdentityProviderEndpoint {
         return presentation.textValue();
     }
 
-    protected BrokeredIdentityContext toBrokeredContext(SdJwtVpVerificationResult result, AuthenticationSessionModel authSession) {
-        JsonNode claims = result.getClaims();
+    // The principal claim becomes the brokered subject. Rejects presentations without a usable value.
+    protected String requirePrincipalClaim(JsonNode claims) {
         JsonNode principal = claims.get(provider.getConfig().getPrincipalAttribute());
         if (principal == null || principal.isNull() || !principal.isValueNode()
                 || StringUtil.isBlank(principal.asText())) {
@@ -424,7 +511,11 @@ public class OID4VPIdentityProviderEndpoint {
                     "Credential does not contain a usable value for the configured principal attribute '"
                             + provider.getConfig().getPrincipalAttribute() + "'");
         }
-        String subject = principal.asText();
+        return principal.asText();
+    }
+
+    protected BrokeredIdentityContext toBrokeredContext(JsonNode claims, AuthenticationSessionModel authSession) {
+        String subject = requirePrincipalClaim(claims);
 
         BrokeredIdentityContext context = new BrokeredIdentityContext(subject, provider.getConfig());
         context.setIdp(provider);
@@ -438,8 +529,8 @@ public class OID4VPIdentityProviderEndpoint {
             context.setEmail(email.asText());
         }
 
-        // Expose disclosed claims so identity provider attribute mappers can consume them.
-        AbstractJsonUserAttributeMapper.storeUserProfileForMapper(context, claims, provider.getConfig().getAlias());
+        // Expose disclosed claims so the OID4VP identity provider mappers can consume them.
+        context.getContextData().put(OID4VPIdentityProvider.CREDENTIAL_CLAIMS, claims);
         return context;
     }
 
@@ -456,15 +547,34 @@ public class OID4VPIdentityProviderEndpoint {
         return baseUriBuilder.path("realms").path(realmName).path("broker").path(alias).path("endpoint");
     }
 
-    protected String endpointBaseUrl() {
-        return endpointBaseUri(session.getContext().getUri().getBaseUriBuilder(), realm.getName(),
-                provider.getConfig().getAlias()).build().toString();
+    // The response_uri advertised in the request object. The wallet posts back to it verbatim, which
+    // carries the cross device signal into directPost.
+    protected String responseUri(boolean crossDevice) {
+        UriBuilder uri = endpointBaseUri(session.getContext().getUri().getBaseUriBuilder(), realm.getName(),
+                provider.getConfig().getAlias());
+        if (crossDevice) {
+            uri.queryParam(FLOW_PARAM, FLOW_CROSS_DEVICE);
+        }
+        return uri.build().toString();
     }
 
-    protected String completeAuthUrl(String responseCode) {
+    protected static boolean isCrossDevice(String flow) {
+        return FLOW_CROSS_DEVICE.equals(flow);
+    }
+
+    protected static Response statusResponse(Response.Status httpStatus, String status, String redirectUri) {
+        Map<String, String> body = redirectUri == null
+                ? Map.of(STATUS_KEY, status)
+                : Map.of(STATUS_KEY, status, STATUS_REDIRECT_URI_KEY, redirectUri);
+        return Response.status(httpStatus).entity(body)
+                .type(MediaType.APPLICATION_JSON_TYPE).cacheControl(CacheControlUtil.noCache()).build();
+    }
+
+    protected String completeAuthUrl(String state, String responseCode) {
         return endpointBaseUri(session.getContext().getUri().getBaseUriBuilder(), realm.getName(),
                 provider.getConfig().getAlias())
                 .path(COMPLETE_AUTH_PATH)
+                .queryParam(OID4VPIdentityProvider.KEY_STATE, state)
                 .queryParam(OID4VCConstants.RESPONSE_CODE, responseCode)
                 .build().toString();
     }
