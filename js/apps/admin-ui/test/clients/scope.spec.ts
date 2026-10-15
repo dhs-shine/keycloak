@@ -20,6 +20,7 @@ import {
 } from "../utils/table.ts";
 import {
   assertAccessTokenContent,
+  assertEffectiveRoleScopeMapping,
   assertHasAccessTokenGenerated,
   assertHasIdTokenGenerated,
   assertHasUserInfoGenerated,
@@ -31,6 +32,7 @@ import {
   clickAddScope,
   goToClientScopeEvaluateTab,
   goToClientScopesTab,
+  goToEffectiveRoleScopeMappingsTab,
   goToGenerateAccessTokenTab,
   selectUser,
 } from "./scope.ts";
@@ -201,6 +203,7 @@ test.describe.serial("Client scopes evaluate subtab", () => {
   const clientName = "testClient";
   const userName = "admin-a";
   const secondUserName = "admin-b";
+  const searchUserName = "picker-target";
   const realmName = `clients-realm-${uuid()}`;
 
   test.beforeAll(async () => {
@@ -219,6 +222,16 @@ test.describe.serial("Client scopes evaluate subtab", () => {
     await adminClient.createUser({
       realm: realmName,
       username: secondUserName,
+      enabled: true,
+    });
+    // Username shares no prefix with the email or name, so the picker can
+    // only find this user through the email/first/last name search.
+    await adminClient.createUser({
+      realm: realmName,
+      username: searchUserName,
+      email: "findme@example.com",
+      firstName: "Pat",
+      lastName: "Lookup",
       enabled: true,
     });
   });
@@ -271,5 +284,100 @@ test.describe.serial("Client scopes evaluate subtab", () => {
 
     await selectUser(page, secondUserName);
     await assertAccessTokenContent(page, secondUserName);
+  });
+
+  test("search user picker by email and last name", async ({ page }) => {
+    await searchItem(page, "Search for client", clientName);
+    await clickTableRowItem(page, clientName);
+    await goToClientScopesTab(page);
+    await goToClientScopeEvaluateTab(page);
+
+    const userInput = page.getByTestId("user").getByRole("combobox");
+    const searchUserOption = page.getByRole("option", {
+      name: new RegExp(searchUserName),
+    });
+    const adminOption = page.getByRole("option", {
+      name: userName,
+      exact: true,
+    });
+
+    await userInput.fill("findme");
+    await expect(searchUserOption).toBeVisible();
+    await expect(adminOption).toBeHidden();
+
+    await userInput.fill("admin");
+    await expect(adminOption).toBeVisible();
+    await expect(searchUserOption).toBeHidden();
+
+    await userInput.fill("lookup");
+    await expect(searchUserOption).toBeVisible();
+    await expect(adminOption).toBeHidden();
+  });
+});
+
+test.describe
+  .serial("Client scopes evaluate effective role scope mappings", () => {
+  const clientName = "evaluate-roles-client";
+  const clientScopeName = "evaluate-roles-scope";
+  const realmRoleName = "evaluate-realm-role";
+  const clientRoleName = "evaluate-client-role";
+  const realmName = `clients-realm-${uuid()}`;
+
+  test.beforeAll(async () => {
+    await adminClient.createRealm(realmName);
+    const { id: clientUuid } = await adminClient.createClient({
+      realm: realmName,
+      protocol: "openid-connect",
+      clientId: clientName,
+      publicClient: false,
+      fullScopeAllowed: false,
+    });
+    await adminClient.createRealmRole({
+      name: realmRoleName,
+      realm: realmName,
+    });
+    await adminClient.createClientRole(clientUuid, {
+      name: clientRoleName,
+      realm: realmName,
+    });
+    await adminClient.createClientScope({
+      name: clientScopeName,
+      protocol: "openid-connect",
+      realm: realmName,
+    });
+    await adminClient.addRealmScopeMappingsToClientScope(
+      clientScopeName,
+      [realmRoleName],
+      realmName,
+    );
+    await adminClient.addClientScopeMappingsToClientScope(
+      clientScopeName,
+      clientName,
+      [clientRoleName],
+      realmName,
+    );
+    await adminClient.addDefaultClientScopeInClient(
+      clientScopeName,
+      clientName,
+      realmName,
+    );
+  });
+
+  test.afterAll(() => adminClient.deleteRealm(realmName));
+
+  test("shows realm and client roles when full scope is disabled", async ({
+    page,
+  }) => {
+    await login(page);
+    await goToRealm(page, realmName);
+    await goToClients(page);
+    await searchItem(page, "Search for client", clientName);
+    await clickTableRowItem(page, clientName);
+    await goToClientScopesTab(page);
+    await goToClientScopeEvaluateTab(page);
+    await goToEffectiveRoleScopeMappingsTab(page);
+
+    await assertEffectiveRoleScopeMapping(page, realmRoleName);
+    await assertEffectiveRoleScopeMapping(page, clientRoleName);
   });
 });

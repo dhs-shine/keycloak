@@ -82,7 +82,6 @@ import { KubernetesSettings } from "./KubernetesSettings";
 import { JWTAuthorizationGrantAssertionSettings } from "./JWTAuthorizationGrantAssertionSettings";
 import JWTAuthorizationGrantSettings from "./JWTAuthorizationGrantSettings";
 import { DefaultSwitchControl } from "../../components/SwitchControl";
-import { GroupResourceContext } from "../../context/group-resource/GroupResourceContext";
 import DefaultTrustSettings from "./DefaultTrustSettings";
 import { IdpDomainsTab } from "./IdpDomainsTab";
 import { IdpOrganizationsTab } from "./IdpOrganizationsTab";
@@ -405,7 +404,30 @@ export default function DetailSettings() {
       if (origAuthnContextDeclRefs) {
         p.config!.authnContextDeclRefs = origAuthnContextDeclRefs;
       }
-      reset(toFormValues(p));
+      const updatedProvider = await adminClient.identityProviders.findOne({
+        alias: provider?.alias || alias,
+      });
+
+      if (updatedProvider) {
+        setProvider(updatedProvider);
+        reset(toFormValues(updatedProvider));
+
+        if (updatedProvider.config?.authnContextClassRefs) {
+          form.setValue(
+            "config.authnContextClassRefs",
+            JSON.parse(updatedProvider.config.authnContextClassRefs),
+          );
+        }
+
+        if (updatedProvider.config?.authnContextDeclRefs) {
+          form.setValue(
+            "config.authnContextDeclRefs",
+            JSON.parse(updatedProvider.config.authnContextDeclRefs),
+          );
+        }
+      } else {
+        reset(toFormValues(p));
+      }
       addAlert(t("updateSuccessIdentityProvider"), AlertVariant.success);
     } catch (error) {
       addError("updateErrorIdentityProvider", error);
@@ -475,10 +497,6 @@ export default function DetailSettings() {
     (isOAuth2 || isOIDC) &&
     !!provider.types?.includes(IdentityProviderType.JWT_AUTHORIZATION_GRANT) &&
     isFeatureEnabled(Feature.JWTAuthorizationGrant);
-  const firstOrgLink = provider.organizationLinks?.[0];
-  const groupResource = firstOrgLink?.organizationId
-    ? adminClient.organizations.groups(firstOrgLink.organizationId)
-    : adminClient.groups;
 
   const loader = async () => {
     const [loaderMappers, loaderMapperTypes] = await Promise.all([
@@ -796,78 +814,76 @@ export default function DetailSettings() {
             title={<TabTitleText>{t("mappers")}</TabTitleText>}
             {...mappersTab}
           >
-            <GroupResourceContext value={groupResource}>
-              <KeycloakDataTable
-                emptyState={
-                  <ListEmptyState
-                    message={t("noMappers")}
-                    instructions={t("noMappersInstructions")}
-                    primaryActionText={t("addMapper")}
-                    onPrimaryAction={() =>
-                      void navigate(
-                        toIdentityProviderAddMapper({
+            <KeycloakDataTable
+              emptyState={
+                <ListEmptyState
+                  message={t("noMappers")}
+                  instructions={t("noMappersInstructions")}
+                  primaryActionText={t("addMapper")}
+                  onPrimaryAction={() =>
+                    void navigate(
+                      toIdentityProviderAddMapper({
+                        realm,
+                        alias: alias!,
+                        providerId: provider.providerId!,
+                        tab: "mappers",
+                      }),
+                    )
+                  }
+                />
+              }
+              loader={loader}
+              key={key}
+              ariaLabelKey="mappersList"
+              searchPlaceholderKey="searchForMapper"
+              toolbarItem={
+                <ToolbarItem>
+                  <Button
+                    id="add-mapper-button"
+                    component={(props) => (
+                      <Link
+                        {...props}
+                        to={toIdentityProviderAddMapper({
                           realm,
                           alias: alias!,
                           providerId: provider.providerId!,
                           tab: "mappers",
-                        }),
-                      )
-                    }
-                  />
-                }
-                loader={loader}
-                key={key}
-                ariaLabelKey="mappersList"
-                searchPlaceholderKey="searchForMapper"
-                toolbarItem={
-                  <ToolbarItem>
-                    <Button
-                      id="add-mapper-button"
-                      component={(props) => (
-                        <Link
-                          {...props}
-                          to={toIdentityProviderAddMapper({
-                            realm,
-                            alias: alias!,
-                            providerId: provider.providerId!,
-                            tab: "mappers",
-                          })}
-                        />
-                      )}
-                      data-testid="addMapper"
-                    >
-                      {t("addMapper")}
-                    </Button>
-                  </ToolbarItem>
-                }
-                columns={[
-                  {
-                    name: "name",
-                    displayKey: "name",
-                    cellRenderer: (row) => (
-                      <MapperLink {...row} provider={provider} />
-                    ),
+                        })}
+                      />
+                    )}
+                    data-testid="addMapper"
+                  >
+                    {t("addMapper")}
+                  </Button>
+                </ToolbarItem>
+              }
+              columns={[
+                {
+                  name: "name",
+                  displayKey: "name",
+                  cellRenderer: (row) => (
+                    <MapperLink {...row} provider={provider} />
+                  ),
+                },
+                {
+                  name: "category",
+                  displayKey: "category",
+                },
+                {
+                  name: "type",
+                  displayKey: "type",
+                },
+              ]}
+              actions={[
+                {
+                  title: t("delete"),
+                  onRowClick: (mapper) => {
+                    setSelectedMapper(mapper);
+                    toggleDeleteMapperDialog();
                   },
-                  {
-                    name: "category",
-                    displayKey: "category",
-                  },
-                  {
-                    name: "type",
-                    displayKey: "type",
-                  },
-                ]}
-                actions={[
-                  {
-                    title: t("delete"),
-                    onRowClick: (mapper) => {
-                      setSelectedMapper(mapper);
-                      toggleDeleteMapperDialog();
-                    },
-                  } as Action<IdPWithMapperAttributes>,
-                ]}
-              />
-            </GroupResourceContext>
+                } as Action<IdPWithMapperAttributes>,
+              ]}
+            />
           </Tab>
           {(provider.organizationLinks?.length ?? 0) > 0 && (
             <Tab
